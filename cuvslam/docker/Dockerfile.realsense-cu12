@@ -1,0 +1,109 @@
+FROM nvidia/cuda:12.6.0-devel-ubuntu22.04
+
+# Install system dependencies (CUDA dev packages provided by -devel base image)
+RUN apt-get update \
+    && DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends --allow-change-held-packages \
+        -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+        build-essential \
+        cmake \
+        curl \
+        git \
+        libgtk-3-dev \
+        libxkbcommon-x11-0 \
+        patch \
+        python3-pip \
+        python3-dev \
+        unzip \
+        vulkan-tools \
+        wget \
+        pkg-config \
+        libusb-1.0-0-dev \
+        libssl-dev \
+        libglfw3-dev \
+        libgl1-mesa-dev \
+        libglu1-mesa-dev \
+        libatlas-base-dev \
+        libsuitesparse-dev \
+        libeigen3-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip
+RUN pip3 install --upgrade pip
+
+# Clone and build librealsense (v2.57.6 tag for Ubuntu 22.04)
+RUN git clone --branch v2.57.6 --depth 1 https://github.com/realsenseai/librealsense.git /opt/librealsense \
+    && cd /opt/librealsense \
+    && mkdir build && cd build \
+    && cmake ../ \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DFORCE_RSUSB_BACKEND=ON \
+        -DBUILD_EXAMPLES=true \
+        -DBUILD_PYTHON_BINDINGS=true \
+        -DPYTHON_EXECUTABLE=$(which python3) \
+    && make -j$(nproc) \
+    && make install
+
+# Copy udev rules for RealSense cameras
+RUN mkdir -p /etc/udev/rules.d/ && cp /opt/librealsense/config/99-realsense-libusb.rules /etc/udev/rules.d/
+
+# Set Python path for pyrealsense2 (following README instructions)
+ENV PYTHONPATH=/opt/librealsense/build/Release
+
+# Set working directory
+WORKDIR /cuvslam
+
+# Build cuVSLAM, install Python packages, and clean up source
+COPY . /tmp/cuvslam_src
+RUN cmake -DCMAKE_BUILD_TYPE=Release -S /tmp/cuvslam_src -B /tmp/cuvslam_build \
+    && make -j$(nproc) -C /tmp/cuvslam_build cuvslam \
+    && CUVSLAM_BUILD_DIR=/tmp/cuvslam_build pip3 install /tmp/cuvslam_src/python/ \
+    && pip3 install -r /tmp/cuvslam_src/examples/requirements.txt \
+    && rm -rf /tmp/cuvslam_src /tmp/cuvslam_build
+
+# Install additional GUI dependencies for rerun-sdk
+RUN apt-get update \
+    && DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends \
+        -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+        libx11-6 \
+        libxext6 \
+        libxrender1 \
+        libxtst6 \
+        libxi6 \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libsm6 \
+        libxrandr2 \
+        libxss1 \
+        libxcb1 \
+        libxcomposite1 \
+        libxcursor1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxinerama1 \
+        libnss3 \
+        libcups2 \
+        libdbus-1-3 \
+        libatk1.0-0 \
+        libgtk-3-0 \
+        libgdk-pixbuf2.0-0 \
+        libpangocairo-1.0-0 \
+        libcairo2 \
+        libpango-1.0-0 \
+        libatspi2.0-0 \
+        libdrm2 \
+        libgbm1 \
+        libasound2 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Test that pyrealsense2 can be imported
+RUN python3 -c "import pyrealsense2 as rs; print('pyrealsense2 imported successfully')"
+
+# Test that rerun-sdk can be imported
+RUN python3 -c "import rerun as rr; print('rerun-sdk imported successfully')"
+
+# Test that PyCuVSLAM can be imported
+RUN python3 -c "import cuvslam; print('cuvslam imported successfully')"
+
+# Startup commands are handled by run scripts

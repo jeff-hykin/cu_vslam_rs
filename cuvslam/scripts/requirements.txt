@@ -1,0 +1,13 @@
+# CI-only Python dependencies for the build/test Docker image
+# Used by scripts/Dockerfile
+#
+# Pin versions to prevent supply chain attacks on self-hosted runners.
+# Test dependencies are in python/test/requirements.txt (installed separately)
+
+# Wheel packaging (used by scripts/build_pycuvslam_in_docker.sh)
+auditwheel==6.6.0
+
+# Documentation build (used by python/docs/conf.py)
+# Sphinx 8.2+ requires Python 3.11; Thor/Orin use Ubuntu 22.04 with Python 3.10
+sphinx==8.1.3
+sphinx-rtd-theme==3.0.2

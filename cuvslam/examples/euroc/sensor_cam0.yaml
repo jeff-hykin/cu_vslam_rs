@@ -1,0 +1,20 @@
+# General sensor definitions.
+sensor_type: camera
+comment: VI-Sensor cam0 (MT9M034)
+
+# Sensor extrinsics wrt. the cam0-frame.
+T_BS:
+  cols: 4
+  rows: 4
+  data: [1.0, 0.0, 0.0, 0.0,
+         0.0, 1.0, 0.0, 0.0,
+         0.0, 0.0, 1.0, 0.0,
+         0.0, 0.0, 0.0, 1.0]
+
+# Camera specific definitions.
+rate_hz: 20
+resolution: [752, 480]
+camera_model: fisheye
+intrinsics: [460.9855047976205, 459.67892586299877, 366.09923470990486, 249.22157605207943] #fu, fv, cu, cv
+distortion_model: fisheye
+distortion_coefficients: [-0.0062748193357009315, 0.029005519692414498, -0.03438856012105873, 0.014830434499283266]

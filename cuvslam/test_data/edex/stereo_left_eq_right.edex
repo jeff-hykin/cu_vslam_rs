@@ -1,0 +1,46 @@
+[
+    {
+        "version": "0.9",
+        "frame_start": 1,
+        "frame_end": 3,
+        "cameras": [
+            {
+                "intrinsics": {
+                    "size": [1024, 768],
+                    "focal": [512, 512],
+                    "principal": [450, 540],
+                    "distortion_model": "pinhole",
+                    "distortion_params": []
+                },
+                "transform": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0]
+                ]
+            },
+            {
+                "intrinsics": {
+                    "size": [1024, 768],
+                    "focal": [512, 512],
+                    "principal": [450, 540],
+                    "distortion_model": "pinhole",
+                    "distortion_params": []
+                },
+                "transform": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0]
+                ]
+            }
+        ]
+    },
+    {
+        "sequence": [
+            ["kitti/00/00.0.0001.png", "kitti/00/00.0.0002.png", "kitti/00/00.0.0003.png"],
+            ["kitti/00/00.0.0001.png", "kitti/00/00.0.0002.png", "kitti/00/00.0.0003.png"]
+        ],
+        "points2d": {},
+        "rig_positions": {},
+        "points3d": {}
+    }
+]

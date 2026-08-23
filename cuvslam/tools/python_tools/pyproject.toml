@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=65,<81", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuvslam-tools"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "av",
+    "jinja2",
+    "matplotlib",
+    "numpy==2.2.3",
+    "scipy==1.15.3",
+    "opencv-python==4.11.0.86",
+    "pandas",
+    "pillow==12.2.0",
+    "pyarrow",
+    "pydantic",
+    "pytransform3d==3.8.0",
+    "pyyaml",
+    "rerun-sdk",
+    "rosbags==0.11.0",
+]
+
+[project.optional-dependencies]
+pdf = [
+    "weasyprint>=60.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"cuvslam_tools.bag2edex" = ["configs/*.yaml"]
+"cuvslam_tools.undistort" = ["input.edex", "input.png"]
+"cuvslam_tools.dataset_preparation.kitti" = ["*.sh"]
+"cuvslam_tools.dataset_preparation.euroc" = ["*.sh"]
+"cuvslam_tools.dataset_preparation.tartan" = ["*.sh"]
+"cuvslam_tools.dataset_preparation.tartan.dataset_converter" = ["cfg/*.json"]
+"cuvslam_tools.dataset_preparation.tum" = ["*.sh", "*.yaml"]
+"cuvslam_tools.reporter" = ["report_templates/*.html"]
+"cuvslam_tools.datasets_validator" = ["configs/*.cfg"]
+
+[project.scripts]
+rosbag_extract_edex = "cuvslam_tools.bag2edex.scripts.extract_edex:main"
+rosbag_extract_images = "cuvslam_tools.bag2edex.scripts.extract_images:main"
+rosbag_extract_urdf = "cuvslam_tools.bag2edex.scripts.extract_urdf:main"
+rosbag_extract_videos = "cuvslam_tools.bag2edex.scripts.extract_videos:main"
+undistort_edex_images = "cuvslam_tools.undistort.undistort:main"
+prepare_kitti = "cuvslam_tools.dataset_preparation.kitti.cli:main"
+prepare_euroc = "cuvslam_tools.dataset_preparation.euroc.cli:main"
+prepare_tartan = "cuvslam_tools.dataset_preparation.tartan.cli:main"
+prepare_tum = "cuvslam_tools.dataset_preparation.tum.cli:main"
+cuvslam_tracker = "cuvslam_tools.tracker.cli:main"
+cuvslam_reporter = "cuvslam_tools.reporter.cli:main"
+cuvslam_validator = "cuvslam_tools.datasets_validator.cli:main"

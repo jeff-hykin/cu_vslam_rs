@@ -1,0 +1,746 @@
+name: Nightly Build & Test
+run-name: "${{ github.event_name == 'schedule' && 'Nightly' || startsWith(github.ref, 'refs/heads/release/') && 'Release candidate' || 'Manual build' }} · ${{ github.ref_name }}"
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        type: boolean
+        default: false
+        description: 'Force build even without recent changes'
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  TEST_RESULTS_ARTIFACT: test-results-staging
+  EVAL_KPIS_ARTIFACT: eval-kpis-staging
+  EVAL_REPORT_ARTIFACT: eval-reports-staging
+  AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
+  S3_DATASETS_BUCKET: ${{ vars.S3_DATASETS_BUCKET }}
+
+jobs:
+  check-changes:
+    name: Check for recent changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      is_release: ${{ steps.decide.outputs.is_release }}
+      release_tag: ${{ steps.decide.outputs.release_tag }}
+      package_version: ${{ steps.decide.outputs.package_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect commits in the last 24 hours
+        id: decide
+        shell: bash
+        env:
+          FORCE_BUILD: ${{ github.event.inputs.force_build }}
+        run: |
+          set -euo pipefail
+          COMMIT_COUNT=$(git log --since="24 hours ago" --oneline | wc -l)
+          FORCE="${FORCE_BUILD:-false}"
+          IS_RELEASE=false
+          RELEASE_TAG=""
+          PACKAGE_VERSION=$(< VERSION)
+
+          if [[ ! "$PACKAGE_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "::error::VERSION must contain MAJOR.MINOR[.PATCH][-SUFFIX] (got '$PACKAGE_VERSION')."
+            exit 1
+          fi
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [[ "$GITHUB_REF_NAME" == release/* ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+            RELEASE_TAG="${RELEASE_TAG#release/}"
+            if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z]+)*$ ]]; then
+              echo "::error::Release branch must be named release/vMAJOR.MINOR[.PATCH][-SUFFIX] (got '$GITHUB_REF_NAME')."
+              exit 1
+            fi
+            if [ "$RELEASE_TAG" != "v$PACKAGE_VERSION" ]; then
+              echo "::error::Release tag $RELEASE_TAG does not match VERSION=$PACKAGE_VERSION."
+              exit 1
+            fi
+            IS_RELEASE=true
+          fi
+
+          echo "is_release=$IS_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ "${COMMIT_COUNT}" -gt 0 ] || [ "${FORCE}" = "true" ] || [ "$IS_RELEASE" = "true" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "Building: ${COMMIT_COUNT} commit(s) in last 24h, force=${FORCE}, release=${IS_RELEASE}"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: no commits in last 24h, force=${FORCE}, release=${IS_RELEASE}"
+          fi
+
+  build-and-test:
+    name: "${{ matrix.name }}"
+    needs: check-changes
+    if: needs.check-changes.outputs.should_build == 'true'
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: ${{ matrix.job_timeout || 120 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 configs (CUDA/Ubuntu controlled by Docker build args)
+          - { name: "x86_64 / cuda-12.6 / ubuntu-22.04", runner: '["gpu"]', cuda: "12.6.3", ubuntu: "22.04", archs: "75;80;86;89;90", platform: "x86_64", wheel: true, eval: true, docs: true }
+          - { name: "x86_64 / cuda-12.6 / ubuntu-24.04", runner: '["gpu"]', cuda: "12.6.3", ubuntu: "24.04", archs: "75;80;86;89;90", platform: "x86_64", wheel: true, eval: true }
+          - { name: "x86_64 / cuda-13.2 / ubuntu-22.04", runner: '["gpu"]', cuda: "13.2.0", ubuntu: "22.04", archs: "75;80;86;89;100;120;121", platform: "x86_64", wheel: true, eval: true }
+          - { name: "x86_64 / cuda-13.2 / ubuntu-24.04", runner: '["gpu"]', cuda: "13.2.0", ubuntu: "24.04", archs: "75;80;86;89;100;120;121", platform: "x86_64", wheel: true, eval: true }
+
+          # Non-default CMake configuration smoke build: builds + tests + wheel with extra
+          # cmake_options, but skips eval/docs and uploads no artifacts (skip_artifacts).
+          # Add another such row to cover a different option set (e.g. USE_CUDA).
+          - { name: "x86_64 / USE_RERUN (config smoke)", runner: '["gpu"]', cuda: "12.6.3", ubuntu: "24.04", archs: "75;80;86;89;90", platform: "x86_64-rerun", wheel: true, cmake_options: "-DUSE_RERUN=ON", skip_artifacts: true }
+
+          # Jetson configs (CUDA version must match host JetPack driver)
+          # Orin uses base_image override; cuda value is not used for the Docker base but kept for artifact naming
+          - { name: "aarch64 / Orin (JP 6.1)",  runner: '["jetson-orin"]', cuda: "12.6.3", ubuntu: "22.04", archs: "87",  platform: "orin",  wheel: true, base_image: "nvcr.io/nvidia/12.6.11-devel:12.6.11-devel-aarch64-ubuntu22.04", ports_mirror: "http://mirrors.ocf.berkeley.edu/ubuntu-ports" }
+          - { name: "aarch64 / Thor (JP 7.1)",  runner: '["jetson-thor"]', cuda: "13.0.1", ubuntu: "24.04", archs: "110", platform: "thor",  wheel: true, retries: 3, build_timeout: 60, job_timeout: 180, ports_mirror: "http://mirrors.ocf.berkeley.edu/ubuntu-ports" }
+    steps:
+      - name: Verify GPU
+        run: nvidia-smi
+
+      - uses: actions/checkout@v5
+        with:
+          lfs: false
+
+      - name: Prepare Git checkout for Docker build
+        run: |
+          # Some runner filesystems normalize executable bits, and the LFS clean filter needs writable storage.
+          git config --local core.fileMode false
+          git config --local lfs.storage /tmp/cuvslam-lfs
+          git lfs pull --include="test_data/"
+
+      - name: Resolve runner storage root
+        if: matrix.eval && vars.RUNNER_STORAGE_ROOT != ''
+        run: echo "RUNNER_STORAGE_ROOT=${{ vars.RUNNER_STORAGE_ROOT }}" >> "$GITHUB_ENV"
+
+      - name: Resolve local datasets root
+        if: matrix.eval
+        run: echo "RUNNER_LOCAL_DATASETS_ROOT=${{ vars.RUNNER_LOCAL_DATASETS_ROOT || '$HOME/.cache/cuvslam' }}" >> "$GITHUB_ENV"
+
+      - name: Build CI tools image
+        if: matrix.eval
+        env:
+          AWS_CLI_PUBLIC_KEY: ${{ vars.AWS_CLI_PUBLIC_KEY }}
+        run: |
+          keyfile="$RUNNER_TEMP/aws-cli-public-key.asc"
+          if [ -z "${AWS_CLI_PUBLIC_KEY:-}" ]; then
+            echo "AWS_CLI_PUBLIC_KEY repository variable is not configured" >&2
+            exit 1
+          fi
+          printf '%s\n' "$AWS_CLI_PUBLIC_KEY" > "$keyfile"
+          DOCKER_BUILDKIT=1 docker build -f scripts/Dockerfile.ci . --network host --tag cuvslam-ci:local \
+            --secret id=aws_cli_public_key,src="$keyfile"
+
+      - name: Verify eval prerequisites
+        if: matrix.eval
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_S3_RO_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_S3_RO_SECRET_ACCESS_KEY }}
+        run: |
+          docker run --rm --network host \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION -e S3_DATASETS_BUCKET \
+            -e RUNNER_STORAGE_ROOT -e RUNNER_LOCAL_DATASETS_ROOT \
+            -v "$(pwd):/cuvslam:ro" \
+            -v "$RUNNER_LOCAL_DATASETS_ROOT:$RUNNER_LOCAL_DATASETS_ROOT" \
+            -w /cuvslam \
+            cuvslam-ci:local ./scripts/check_eval_prerequisites.sh
+
+      - name: Stage eval datasets
+        if: matrix.eval
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_S3_RO_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_S3_RO_SECRET_ACCESS_KEY }}
+        run: |
+          mkdir -p "$RUNNER_LOCAL_DATASETS_ROOT"
+          docker run --rm --network host \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION -e S3_DATASETS_BUCKET \
+            -e RUNNER_LOCAL_DATASETS_ROOT \
+            -v "$(pwd):/cuvslam:ro" \
+            -v "$RUNNER_LOCAL_DATASETS_ROOT:$RUNNER_LOCAL_DATASETS_ROOT" \
+            -w /cuvslam \
+            cuvslam-ci:local ./scripts/stage_eval_datasets.sh
+
+      - name: Build C++ libraries
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: ${{ matrix.retries || 1 }}
+          timeout_minutes: ${{ matrix.build_timeout || 120 }}
+          retry_wait_seconds: 30
+          command: |
+            CUDA_VERSION=${{ matrix.cuda }} \
+            UBUNTU_VERSION=${{ matrix.ubuntu }} \
+            BASE_IMAGE="${{ matrix.base_image }}" \
+            UBUNTU_PORTS_MIRROR="${{ matrix.ports_mirror }}" \
+            EXTRA_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${{ matrix.archs }} ${{ matrix.cmake_options }}" \
+            ./scripts/build_cuvslam_in_docker.sh Release ./output
+
+      - name: Run C++ tests
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: ${{ matrix.retries || 1 }}
+          timeout_minutes: 30
+          retry_wait_seconds: 30
+          command: ./scripts/test_cuvslam_in_docker.sh ./output
+
+      - name: Build Python wheel
+        if: matrix.wheel
+        run: |
+          CUDA_VERSION=${{ matrix.cuda }} \
+          UBUNTU_VERSION=${{ matrix.ubuntu }} \
+          ./scripts/build_pycuvslam_in_docker.sh ./output
+
+      - name: Verify Python wheel installs
+        if: matrix.wheel
+        env:
+          PACKAGE_VERSION: ${{ needs.check-changes.outputs.package_version }}
+        run: |
+          ./scripts/verify_pycuvslam_wheel_in_docker.sh \
+            ./output "$PACKAGE_VERSION" "$(git rev-parse HEAD)"
+
+      - name: Run Python tests
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: ${{ matrix.retries || 1 }}
+          timeout_minutes: 30
+          retry_wait_seconds: 30
+          command: ./scripts/test_pycuvslam_in_docker.sh ./output
+
+      - name: Package C++ distribution
+        if: ${{ !matrix.skip_artifacts }}
+        env:
+          PACKAGE_VERSION: ${{ needs.check-changes.outputs.package_version }}
+        run: |
+          CONFIG="${{ matrix.platform }}-cuda${{ matrix.cuda }}-ubuntu${{ matrix.ubuntu }}"
+          ./scripts/package_cpp_dist.sh \
+            ./output \
+            "./output/dist/cuvslam-cpp-${PACKAGE_VERSION}-${CONFIG}.tar.gz"
+
+      - name: Generate test summary
+        if: always() && !matrix.skip_artifacts
+        run: |
+          CONFIG="${{ matrix.platform }}-cuda${{ matrix.cuda }}-ubuntu${{ matrix.ubuntu }}"
+          python3 scripts/junit-to-markdown.py "$CONFIG" C++ output/cpp-test-results.xml > output/test-summary.txt
+          python3 scripts/junit-to-markdown.py "$CONFIG" Python output/python-test-output.txt >> output/test-summary.txt
+
+      - name: Build documentation
+        if: matrix.docs
+        run: ./scripts/build_docs_in_docker.sh ./output
+
+      - name: Package documentation
+        if: matrix.docs
+        env:
+          PACKAGE_VERSION: ${{ needs.check-changes.outputs.package_version }}
+        run: |
+          mkdir -p output/dist
+          tar -czf "output/dist/cuvslam-docs-${PACKAGE_VERSION}.tar.gz" -C output/docs .
+
+      - name: Upload documentation
+        if: matrix.docs
+        uses: actions/upload-artifact@v7
+        with:
+          path: output/dist/cuvslam-docs-${{ needs.check-changes.outputs.package_version }}.tar.gz
+          archive: false
+          overwrite: true
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Run cuVSLAM evaluation
+        if: matrix.eval
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_S3_RO_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_S3_RO_SECRET_ACCESS_KEY }}
+        run: |
+          RUN_ID="$(date -u +%Y-%m-%d)" \
+          KPI_HISTORY_DIR="${RUNNER_STORAGE_ROOT:?RUNNER_STORAGE_ROOT must be set}/cuvslam-ci/kpi-history/${{ matrix.platform }}-cuda${{ matrix.cuda }}-ubuntu${{ matrix.ubuntu }}" \
+          ./scripts/eval_cuvslam_in_docker.sh ./output
+
+      - name: Upload KPI results
+        if: always() && matrix.eval
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.EVAL_KPIS_ARTIFACT }}-${{ needs.check-changes.outputs.package_version }}-${{ matrix.platform }}-cuda${{ matrix.cuda }}-ubuntu${{ matrix.ubuntu }}
+          path: |
+            output/eval/kpi_*.json
+            output/eval/kpi_*.json.table
+            output/eval/kpi_*.json.drift
+          overwrite: true
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Upload eval PDF reports for aggregation
+        if: always() && matrix.eval
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.EVAL_REPORT_ARTIFACT }}-${{ needs.check-changes.outputs.package_version }}-${{ matrix.platform }}-cuda${{ matrix.cuda }}-ubuntu${{ matrix.ubuntu }}
+          path: output/eval/stats/**/report_*.pdf
+          overwrite: true
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Upload test results
+        if: always() && !matrix.skip_artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TEST_RESULTS_ARTIFACT }}-${{ needs.check-changes.outputs.package_version }}-${{ matrix.platform }}-cuda${{ matrix.cuda }}-ubuntu${{ matrix.ubuntu }}
+          path: |
+            output/cpp-test-results.xml
+            output/python-test-output.txt
+            output/test-summary.txt
+          overwrite: true
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Upload C++ distribution
+        if: ${{ !matrix.skip_artifacts }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: output/dist/cuvslam-cpp-${{ needs.check-changes.outputs.package_version }}-${{ matrix.platform }}-cuda${{ matrix.cuda }}-ubuntu${{ matrix.ubuntu }}.tar.gz
+          archive: false
+          overwrite: true
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload Python wheel
+        if: matrix.wheel && !matrix.skip_artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          path: output/wheel/*.whl
+          archive: false
+          overwrite: true
+          retention-days: 30
+          if-no-files-found: error
+
+  nightly-summary:
+    name: Build status & summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [check-changes, build-and-test]
+    outputs:
+      release_cpp_count: ${{ steps.finalize-artifacts.outputs.cpp_count }}
+      release_wheel_count: ${{ steps.finalize-artifacts.outputs.wheel_count }}
+    permissions:
+      actions: write  # Required by github.rest.actions.deleteArtifact below.
+      contents: read
+    steps:
+      - name: Download test result artifacts
+        if: >-
+          needs.check-changes.outputs.should_build == 'true' &&
+          needs.build-and-test.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ env.TEST_RESULTS_ARTIFACT }}-${{ needs.check-changes.outputs.package_version }}-*
+          path: artifacts/test-results
+
+      - name: Download KPI staging artifacts
+        if: >-
+          needs.check-changes.outputs.should_build == 'true' &&
+          needs.build-and-test.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ env.EVAL_KPIS_ARTIFACT }}-${{ needs.check-changes.outputs.package_version }}-*
+          path: artifacts/kpis
+
+      - name: Download evaluation report staging artifacts
+        if: >-
+          needs.check-changes.outputs.should_build == 'true' &&
+          needs.build-and-test.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ env.EVAL_REPORT_ARTIFACT }}-${{ needs.check-changes.outputs.package_version }}-*
+          path: artifacts/eval-reports
+
+      - name: Build combined summary
+        id: aggregate
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.check-changes.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p consolidated/test-results consolidated/kpis consolidated/eval-reports
+          REPORT=consolidated/summary.md
+
+          {
+            echo "# cuVSLAM CI Summary"
+            echo ""
+            echo "- Trigger: \`$GITHUB_EVENT_NAME\`"
+            echo "- Ref: \`$GITHUB_REF_NAME\`"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Matrix result: \`${{ needs.build-and-test.result }}\`"
+            echo ""
+          } > "$REPORT"
+
+          if [ "${{ needs.check-changes.result }}" != "success" ]; then
+            {
+              echo "The preflight job failed before the build decision could be made."
+              echo ""
+            } >> "$REPORT"
+            echo "has_test_results=false" >> "$GITHUB_OUTPUT"
+            echo "has_reports=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ needs.check-changes.outputs.should_build }}" != "true" ]; then
+            {
+              echo "Nightly skipped because there were no commits in the last 24 hours and the build was not forced."
+              echo ""
+            } >> "$REPORT"
+            echo "has_test_results=false" >> "$GITHUB_OUTPUT"
+            echo "has_reports=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ needs.build-and-test.result }}" != "success" ]; then
+            {
+              echo "Artifact consolidation is deferred until all matrix jobs succeed."
+              echo "Per-configuration staging artifacts are retained for selective job reruns."
+              echo ""
+            } >> "$REPORT"
+            echo "has_test_results=false" >> "$GITHUB_OUTPUT"
+            echo "has_reports=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          test_config_count=0
+          TEST_ARTIFACT_PREFIX="${TEST_RESULTS_ARTIFACT}-${PACKAGE_VERSION}-"
+          for testdir in artifacts/test-results/${TEST_ARTIFACT_PREFIX}*; do
+            [ -d "$testdir" ] || continue
+            CONFIG=${testdir#artifacts/test-results/${TEST_ARTIFACT_PREFIX}}
+            mkdir -p "consolidated/test-results/$CONFIG"
+            cp -a "$testdir"/. "consolidated/test-results/$CONFIG/"
+            test_config_count=$((test_config_count + 1))
+          done
+          if [ "$test_config_count" -gt 0 ]; then
+            echo "has_test_results=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_test_results=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "## Test Results"
+            echo ""
+            echo "| Status | Configuration | Language | Total | Passed | Failed | Errors | Skipped |"
+            echo "|:------:|---------------|----------|------:|-------:|-------:|-------:|--------:|"
+          } >> "$REPORT"
+
+          for summary in consolidated/test-results/*/test-summary.txt; do
+            [ -f "$summary" ] || continue
+            while IFS='|' read -r status config language total passed failed errors skipped _details; do
+              case "$status" in
+                pass) icon="PASS" ;;
+                fail) icon="FAIL" ;;
+                *) icon="NO RESULTS" ;;
+              esac
+              echo "| $icon | $config | $language | $total | $passed | $failed | $errors | $skipped |" >> "$REPORT"
+            done < "$summary"
+          done
+          echo "" >> "$REPORT"
+
+          # Merge every config's KPI table into one, prefixed with a Config column
+          # (platform-cuda-ubuntu slug) so rows stay distinct and reports never overwrite.
+          kpi_emit_head=1
+          kpi_config_count=0
+          KPI_ARTIFACT_PREFIX="${EVAL_KPIS_ARTIFACT}-${PACKAGE_VERSION}-"
+          for kpidir in artifacts/kpis/${KPI_ARTIFACT_PREFIX}*; do
+            [ -d "$kpidir" ] || continue
+            CONFIG=${kpidir#artifacts/kpis/${KPI_ARTIFACT_PREFIX}}
+            mkdir -p "consolidated/kpis/$CONFIG"
+            cp -a "$kpidir"/. "consolidated/kpis/$CONFIG/"
+            KPI_TABLE=$(find "$kpidir" -name "kpi_*.json.table" -print -quit 2>/dev/null || true)
+            [ -f "$KPI_TABLE" ] || continue
+            awk -v slug="$CONFIG" -v emit_head="$kpi_emit_head" '
+              NR==1 { if (emit_head=="1") print "| Config " $0; next }
+              NR==2 { if (emit_head=="1") print "|--------" $0; next }
+              { print "| " slug " " $0 }
+            ' "$KPI_TABLE" >> consolidated/kpi-combined.table
+            kpi_emit_head=""
+            kpi_config_count=$((kpi_config_count + 1))
+          done
+
+          if [ -f consolidated/kpi-combined.table ]; then
+            {
+              echo "## cuVSLAM Evaluation KPIs"
+              echo ""
+              cat consolidated/kpi-combined.table
+              echo ""
+            } >> "$REPORT"
+          fi
+
+          report_config_count=0
+          REPORT_ARTIFACT_PREFIX="${EVAL_REPORT_ARTIFACT}-${PACKAGE_VERSION}-"
+          for repdir in artifacts/eval-reports/${REPORT_ARTIFACT_PREFIX}*; do
+            [ -d "$repdir" ] || continue
+            CONFIG=${repdir#artifacts/eval-reports/${REPORT_ARTIFACT_PREFIX}}
+            PDF=$(find "$repdir" -name "report_*.pdf" -print -quit 2>/dev/null || true)
+            [ -f "$PDF" ] || continue
+            mkdir -p "consolidated/eval-reports/$CONFIG"
+            cp -a "$repdir"/. "consolidated/eval-reports/$CONFIG/"
+            report_config_count=$((report_config_count + 1))
+          done
+
+          if [ "$report_config_count" -gt 0 ]; then
+            echo "has_reports=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_reports=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "${{ needs.build-and-test.result }}" = "success" ]; then
+            if [ "$test_config_count" -eq 0 ]; then
+              echo "::error::Successful matrix produced no test result artifacts."
+              exit 1
+            fi
+            if [ "$kpi_config_count" -eq 0 ]; then
+              echo "::error::Successful matrix produced no KPI artifacts."
+              exit 1
+            fi
+            if [ "$report_config_count" -ne "$kpi_config_count" ]; then
+              echo "::error::Expected one PDF report artifact for each KPI configuration; got $report_config_count reports and $kpi_config_count KPI sets."
+              exit 1
+            fi
+          fi
+
+      - name: Upload consolidated test results
+        id: upload-tests
+        if: steps.aggregate.outputs.has_test_results == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ needs.check-changes.outputs.package_version }}
+          path: consolidated/test-results/
+          overwrite: true
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Package evaluation record
+        if: steps.aggregate.outputs.has_reports == 'true'
+        env:
+          PACKAGE_VERSION: ${{ needs.check-changes.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          EVALUATION_SUMMARY=consolidated/evaluation-summary.md
+          {
+            echo "# cuVSLAM ${PACKAGE_VERSION}"
+            echo ""
+            echo "## Evaluation KPIs"
+            echo ""
+            cat consolidated/kpi-combined.table
+            echo ""
+            echo "## Evaluation record"
+            echo ""
+            echo "The attached \`cuvslam-evaluation-${PACKAGE_VERSION}.tar.gz\` contains the KPI data and PDF evaluation reports used to verify this release."
+          } > "$EVALUATION_SUMMARY"
+          tar -czf "consolidated/cuvslam-evaluation-${PACKAGE_VERSION}.tar.gz" \
+            -C consolidated \
+            evaluation-summary.md \
+            kpi-combined.table \
+            kpis \
+            eval-reports
+
+      - name: Upload consolidated evaluation record
+        id: upload-evaluation
+        if: steps.aggregate.outputs.has_reports == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          path: consolidated/cuvslam-evaluation-${{ needs.check-changes.outputs.package_version }}.tar.gz
+          archive: false
+          overwrite: true
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Delete staging artifacts
+        id: finalize-artifacts
+        if: always() && needs.build-and-test.result == 'success'
+        uses: actions/github-script@v7
+        env:
+          PACKAGE_VERSION: ${{ needs.check-changes.outputs.package_version }}
+          TESTS_RETAINED: ${{ steps.upload-tests.outcome == 'success' }}
+          EVALUATION_RETAINED: ${{ steps.upload-evaluation.outcome == 'success' }}
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const cppCount = artifacts.filter(
+              artifact => artifact.name.startsWith(`cuvslam-cpp-${process.env.PACKAGE_VERSION}-`)
+                && artifact.name.endsWith('.tar.gz'),
+            ).length;
+            const wheelCount = artifacts.filter(
+              artifact => artifact.name.startsWith('cuvslam-') && artifact.name.endsWith('.whl'),
+            ).length;
+            core.setOutput('cpp_count', cppCount.toString());
+            core.setOutput('wheel_count', wheelCount.toString());
+
+            const prefixes = [];
+            if (process.env.TESTS_RETAINED === 'true') {
+              prefixes.push(`${process.env.TEST_RESULTS_ARTIFACT}-${process.env.PACKAGE_VERSION}-`);
+            }
+            if (process.env.EVALUATION_RETAINED === 'true') {
+              prefixes.push(
+                `${process.env.EVAL_KPIS_ARTIFACT}-${process.env.PACKAGE_VERSION}-`,
+                `${process.env.EVAL_REPORT_ARTIFACT}-${process.env.PACKAGE_VERSION}-`,
+              );
+            }
+            for (const artifact of artifacts.filter(a => prefixes.some(prefix => a.name.startsWith(prefix)))) {
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id,
+              });
+            }
+
+      - name: Publish workflow summary
+        if: always()
+        run: |
+          if [ -f consolidated/summary.md ]; then
+            cat consolidated/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## cuVSLAM CI Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "Summary generation failed. Inspect the job logs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check overall result
+        if: always()
+        run: |
+          if [ "${{ needs.check-changes.result }}" != "success" ]; then
+            echo "::error::The build preflight job did not succeed: ${{ needs.check-changes.result }}"
+            exit 1
+          elif [ "${{ needs.check-changes.outputs.should_build }}" = "false" ]; then
+            echo "Nightly skipped: no changes in the last 24 hours."
+          elif [ "${{ needs.build-and-test.result }}" != "success" ]; then
+            echo "::error::One or more build-and-test matrix jobs did not succeed: ${{ needs.build-and-test.result }}"
+            exit 1
+          fi
+
+  publish-release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    if: >-
+      always() &&
+      needs.check-changes.outputs.is_release == 'true' &&
+      needs.build-and-test.result == 'success' &&
+      needs.nightly-summary.result == 'success'
+    needs: [check-changes, build-and-test, nightly-summary]
+    permissions:
+      actions: read
+      contents: write  # Required by gh release create below.
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cuvslam-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-changes.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          existing_release=$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"${TAG}\") | [.id, .draft, .html_url] | @tsv"
+          )
+          if [ -n "$existing_release" ]; then
+            echo "::error::A draft or published release already targets ${TAG}. Delete an obsolete draft explicitly before rebuilding; published releases must not be replaced."
+            echo "$existing_release"
+            exit 1
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Git tag ${TAG} already exists. Refusing to move or replace it."
+            exit 1
+          fi
+
+      - name: Validate release assets and prepare notes
+        env:
+          PACKAGE_VERSION: ${{ needs.check-changes.outputs.package_version }}
+          EXPECTED_CPP_COUNT: ${{ needs.nightly-summary.outputs.release_cpp_count }}
+          EXPECTED_WHEEL_COUNT: ${{ needs.nightly-summary.outputs.release_wheel_count }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          WHEEL_VERSION=$(
+            python3 -c '
+          import sys
+          try:
+              from packaging.version import Version
+          except ModuleNotFoundError:
+              from pip._vendor.packaging.version import Version
+          print(Version(sys.argv[1]))
+          ' "$PACKAGE_VERSION"
+          )
+          cpp_assets=(release-assets/cuvslam-cpp-"${PACKAGE_VERSION}"-*.tar.gz)
+          wheel_assets=(release-assets/cuvslam-"${WHEEL_VERSION}"+cu*.whl)
+          docs_asset="release-assets/cuvslam-docs-${PACKAGE_VERSION}.tar.gz"
+          evaluation_asset="release-assets/cuvslam-evaluation-${PACKAGE_VERSION}.tar.gz"
+
+          if [[ ! "$EXPECTED_CPP_COUNT" =~ ^[1-9][0-9]*$ ]] || [[ ! "$EXPECTED_WHEEL_COUNT" =~ ^[1-9][0-9]*$ ]] ||
+             [ "${#cpp_assets[@]}" -ne "$EXPECTED_CPP_COUNT" ] ||
+             [ "${#wheel_assets[@]}" -ne "$EXPECTED_WHEEL_COUNT" ]; then
+            echo "::error::Expected $EXPECTED_CPP_COUNT C++ archives and $EXPECTED_WHEEL_COUNT Python wheels; got ${#cpp_assets[@]} and ${#wheel_assets[@]}."
+            exit 1
+          fi
+          if [ ! -f "$docs_asset" ] || [ ! -f "$evaluation_asset" ]; then
+            echo "::error::Versioned documentation or evaluation asset is missing."
+            exit 1
+          fi
+
+          assets=(release-assets/*)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets were downloaded."
+            exit 1
+          fi
+          for asset in "${assets[@]}"; do
+            expected_version=$PACKAGE_VERSION
+            if [[ "$asset" == *.whl ]]; then
+              expected_version=$WHEEL_VERSION
+            fi
+            if [[ "$(basename "$asset")" != *"$expected_version"* ]]; then
+              echo "::error::Release asset does not contain version $expected_version: $asset"
+              exit 1
+            fi
+          done
+
+          tar -xOf "$evaluation_asset" evaluation-summary.md > release-notes.md
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.check-changes.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-assets/*)
+          draft_url=$(
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "cuVSLAM ${TAG}" \
+              --notes-file release-notes.md \
+              --draft \
+              "${assets[@]}"
+          )
+          {
+            echo "## Draft release created"
+            echo ""
+            echo "[$TAG]($draft_url)"
+            echo ""
+            echo "To rebuild this release candidate, delete the draft explicitly and dispatch the updated release branch again."
+          } >> "$GITHUB_STEP_SUMMARY"
