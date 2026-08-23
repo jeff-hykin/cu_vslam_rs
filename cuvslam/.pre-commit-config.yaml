@@ -1,0 +1,78 @@
+repos:
+  # Standard hooks for basic file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: fix-byte-order-marker  # <--- Removes <U+FEFF>
+      - id: end-of-file-fixer      # Ensures file ends with a newline
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: no-commit-to-branch    # Prevents committing to master
+      - id: mixed-line-ending
+        args:
+          - --fix=lf
+
+  # Usage:
+  # 1. add --remove-header arg to the hooks below
+  # 2. pre-commit run insert-license --all-files
+  # 3. update license_header.txt
+  # 4. remove --remove-header
+  # 5. pre-commit run insert-license --all-files
+  - repo: https://github.com/lucas-c/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: insert-license
+        name: Add Header (C++)
+        files: \.(cpp|hpp|c|h|cu|cuh)$
+        args:
+          - --license-filepath
+          - license_header.txt
+          - --comment-style
+          - /*| *| */
+
+      - id: insert-license
+        name: Add Header (Python/CMake)
+        # Matches .py, .cmake, and CMakeLists.txt files except __init__.py
+        files: (\.py|\.cmake|CMakeLists.txt)$
+        exclude: __init__\.py$
+        args:
+          - --license-filepath
+          - license_header.txt
+          - --comment-style
+          - "#"
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v15.0.7
+    hooks:
+      - id: clang-format
+        types_or: [c, c++, cuda]
+
+  - repo: local
+    hooks:
+      - id: check-workflow-security
+        name: Verify CI workflow security guards
+        entry: scripts/check-workflow-security.sh
+        language: script
+        files: ^\.github/workflows/.*\.ya?ml$
+        pass_filenames: false
+
+      - id: isolated-ruleset-change
+        name: Require ruleset/CODEOWNERS/CI-workflow changes in their own PR
+        entry: scripts/check-isolated-ruleset-change.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
+        args: ["origin/main"]
+
+      - id: isolated-ruleset-change-ci
+        name: Require ruleset/CODEOWNERS/CI-workflow changes in their own PR (CI)
+        entry: scripts/check-isolated-ruleset-change.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+        stages: [manual]

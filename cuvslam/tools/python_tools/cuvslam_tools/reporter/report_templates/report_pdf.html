@@ -1,0 +1,144 @@
+<html>
+<head>
+    <style>
+        @page {
+            size: A4 landscape;
+            margin: 1cm;
+        }
+
+        body {
+            width: 100%;
+            max-width: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
+        }
+
+        * {
+            font-size: 9pt;
+        }
+
+        h2 {
+            font-size: 14pt;
+            margin-top: 10px;
+            margin-bottom: 5px;
+        }
+
+        table {
+            font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
+            border-collapse: collapse;
+            width: 100%;
+            table-layout: fixed;
+            font-size: 8pt;
+        }
+
+        table td, table th {
+            border: 1px solid #ddd;
+            text-align: left;
+            padding: 4px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        table tr:nth-child(even) {
+            background-color: #f2f2f2
+        }
+
+        table tr.summary {
+            font-weight: bold;
+        }
+
+        table th {
+            padding-top: 6px;
+            padding-bottom: 6px;
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .keeptogether {
+            page-break-inside: avoid !important;
+            display: block;
+        }
+
+        br {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+<table>
+    <tr>
+        <th>cuVSLAM</th>
+        <th>{{date}}</th>
+    </tr>
+    <tr class="summary">
+        <td>Branch name</td>
+        <td>{{branch_name}}</td>
+    </tr>
+    <tr class="summary">
+        <td>Commit SHA</td>
+        <td>{{commit_sha}}</td>
+    </tr>
+    <tr class="summary">
+        <td>Commit Date/Time</td>
+        <td>{{commit_ts}}</td>
+    </tr>
+    <tr class="summary">
+        <td>Comments</td>
+        <td>{{comments}}</td>
+    </tr>
+</table>
+<br>
+<table>
+    <tr>
+        <th>Sequence_name</th>
+        <th>N frames</th>
+        <th>Average fps</th>
+        <th>ATE [%/m]</th>
+        <th>ARE [deg/m]</th>
+        <th>Kabsch RMS [m]</th>
+    </tr>
+    {% for s in stats %}
+        <tr>
+            <td>{{ s.sequence_title }}</td>
+            <td>{% if s.n_frames > 0 %}{{s.n_frames }}{% endif %}</td>
+            <td>{% if s.average_fps > 0 %}{{ '%0.8f' % s.average_fps }}{% endif %}</td>
+            <td>{% if s.gt_av_translation_error > 0 %}{{ '%0.8f' % s.gt_av_translation_error }}{% endif %}</td>
+            <td>{% if s.gt_av_rotation_error > 0 %}{{ '%0.8f' % s.gt_av_rotation_error }}{% endif %}</td>
+            <td>{% if s.gt_simple_error > 0 %}{{ '%0.8f' % s.gt_simple_error }}{% endif %}
+        </tr>
+    {% endfor %}
+    <tr class="summary">
+        <td>{{ total.title}}</td>
+        <td>{% if total.n_frames > 0 %}{{total.n_frames}}{% endif %}</td>
+        <td>{% if total.average_fps > 0 %}{{ '%0.8f' % total.average_fps }}{% endif %}</td>
+        <td><strong>{{ '%0.8f' % total.summary_av_gt_translation_error }}</strong></td>
+        <td><strong>{{ '%0.8f' % total.summary_av_gt_rotation_error }}</strong></td>
+        <td><strong>{{ '%0.8f' % total.summary_av_gt_simple_error }}</strong></td>
+    </tr>
+    </table>
+
+{% if avg_tl_base64 or avg_rl_base64 %}
+    <h2>Average</h2>
+    {% if avg_tl_base64 %}<img src="{{ avg_tl_base64 }}">{% endif %}
+    {% if avg_rl_base64 %}<img src="{{ avg_rl_base64 }}">{% endif %}
+{% endif %}
+
+{% for s in stats %}
+    <div class="keeptogether">
+        <h2>Sequence {{ s.sequence_title }}</h2>
+        <div>
+            {% if s.bird_view_base64 %}
+            <img src="{{ s.bird_view_base64 }}">
+            {% endif %}
+        </div>
+    </div>
+{% endfor %}
+</body>
+</html>

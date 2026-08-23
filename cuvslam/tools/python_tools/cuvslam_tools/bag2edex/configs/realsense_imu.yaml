@@ -1,0 +1,16 @@
+# Topic names:
+camera_info_topics:
+  - /camera/infra1/camera_info
+  - /camera/infra2/camera_info
+image_topics:
+  - /camera/infra1/image_rect_raw
+  - /camera/infra2/image_rect_raw
+
+# Frame names:
+rig_frame: camera_link
+
+# IMU topic:
+imu_topic: /camera/imu
+
+sync_threshold_ns: 30000000  # 30ms
+num_workers: 8

@@ -1,0 +1,19 @@
+# Copyright 2026 Dimensional Inc.
+# SPDX-License-Identifier: LicenseRef-NVIDIA-Community
+
+[package]
+name = "cu_vslam_rs"
+version = "0.1.0"
+edition = "2021"
+license-file = "LICENSE"
+description = "Rust FFI for NVIDIA cuVSLAM visual odometry: raw bindings plus a safe Tracker wrapper. Requires a cuVSLAM SDK at build time (CUVSLAM_SDK_DIR); the repository's nix flake provides one per platform."
+repository = "https://github.com/jeff-hykin/cu_vslam_rs"
+keywords = ["cuvslam", "vslam", "visual-odometry", "slam", "robotics"]
+categories = ["science::robotics", "external-ffi-bindings"]
+links = "cuvslam"
+# The crates.io package is just the bindings + shim; the vendored cuVSLAM C++
+# fork and the nix flake stay repo-only.
+include = ["src/**", "shim/**", "build.rs", "README.md", "LICENSE"]
+
+[build-dependencies]
+cc = { version = "1", features = ["parallel"] }

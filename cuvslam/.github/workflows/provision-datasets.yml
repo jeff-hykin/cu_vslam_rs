@@ -1,0 +1,77 @@
+name: Provision dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: Dataset to download, convert, and upload as a tarball
+        type: choice
+        options:
+          - kitti
+          - euroc
+          - tum
+          - tartan
+        default: kitti
+      force_download:
+        description: Re-download raw archives even when they already exist
+        type: boolean
+        default: false
+      dry_run:
+        description: Build the tarball but skip S3 upload
+        type: boolean
+        default: false
+
+concurrency:
+  group: provision-dataset-${{ github.event.inputs.dataset }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
+  S3_DATASETS_BUCKET: ${{ vars.S3_DATASETS_BUCKET }}
+
+jobs:
+  provision:
+    name: "Provision ${{ github.event.inputs.dataset }}"
+    if: github.ref == 'refs/heads/main'
+    runs-on: [gpu]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Build CI tools image
+        env:
+          AWS_CLI_PUBLIC_KEY: ${{ vars.AWS_CLI_PUBLIC_KEY }}
+        run: |
+          keyfile="$RUNNER_TEMP/aws-cli-public-key.asc"
+          if [ -z "${AWS_CLI_PUBLIC_KEY:-}" ]; then
+            echo "AWS_CLI_PUBLIC_KEY repository variable is not configured" >&2
+            exit 1
+          fi
+          printf '%s\n' "$AWS_CLI_PUBLIC_KEY" > "$keyfile"
+          DOCKER_BUILDKIT=1 docker build -f scripts/Dockerfile.ci . --network host --tag cuvslam-ci:local \
+            --secret id=aws_cli_public_key,src="$keyfile"
+
+      - name: Seed S3 dataset tarball
+        env:
+          FORCE_DOWNLOAD: ${{ github.event.inputs.force_download }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          AWS_ACCESS_KEY_ID: ${{ github.event.inputs.dry_run != 'true' && secrets.AWS_S3_ACCESS_KEY_ID || '' }}
+          AWS_SECRET_ACCESS_KEY: ${{ github.event.inputs.dry_run != 'true' && secrets.AWS_S3_SECRET_ACCESS_KEY || '' }}
+        run: |
+          host_work="$RUNNER_TEMP/provision-work-${GITHUB_RUN_ID}"
+          container_work=/tmp/cuvslam-provision
+          mkdir -p "$host_work"
+          docker run --rm --network host \
+            -e FORCE_DOWNLOAD -e DRY_RUN -e AWS_DEFAULT_REGION -e S3_DATASETS_BUCKET \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+            -e PROVISION_WORK_DIR="$container_work" \
+            -v "$(pwd):/cuvslam:ro" \
+            -v "$host_work:$container_work" \
+            -w /cuvslam \
+            cuvslam-ci:local ./scripts/provision_dataset.sh "${{ github.event.inputs.dataset }}"

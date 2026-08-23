@@ -1,0 +1,8 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 120
+IncludeBlocks: Preserve
+PointerAlignment: Left
+AccessModifierOffset: -2
+...

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.10.2"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "cuvslam"
+dynamic = ["version"]
+description = "Python bindings for cuVSLAM library"
+authors = [
+    {name = "NVIDIA Corporation"}
+]
+license = {text = "Other/Proprietary License"}
+requires-python = ">=3.9"
+urls = {Homepage = "https://github.com/nvidia-isaac/cuVSLAM"}
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+dependencies = ["pyyaml>=5.3.1"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = "CMakeLists.txt"
+cmake.args = ["-G", "Unix Makefiles", "-DCMAKE_MAKE_PROGRAM=make"]
+
+# Setuptools-style build caching in a local directory
+build-dir = "build/{wheel_tag}"
+
+# Build stable ABI wheels for CPython 3.12+
+wheel.py-api = "cp312"
+
+cmake.source-dir = "."
+
+wheel.install-dir = "cuvslam"
+
+# For distribution mode: include prebuilt binaries and headers in source tarball
+# sdist.include = ["../include/**", "../bin/**"]
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "../VERSION"
+regex = "(?P<value>\\d+\\.\\d+\\.\\d+(?:\\+[a-zA-Z0-9._-]+)?)"
+
+[tool.scikit-build.cmake.define]
+# Allow override via CUDA_HOME environment variable
+# If we don't set CUDAToolkit_ROOT, cmake will find nvcc in /usr/bin
+CUDAToolkit_ROOT = {env = "CUDA_HOME", default = "/usr/local/cuda"}

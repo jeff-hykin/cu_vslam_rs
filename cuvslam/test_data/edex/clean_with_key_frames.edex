@@ -1,0 +1,32 @@
+[
+    {
+        "version": "0.9",
+        "frame_start": 1,
+        "frame_end": 83,
+        "cameras": [
+            {
+                "intrinsics": {
+                    "size": [1024, 768],
+                    "focal": [512, 512],
+                    "principal": [450, 540],
+                    "distortion_model": "pinhole",
+                    "distortion_params": []
+                },
+                "transform": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0]
+                ]
+            }
+        ]
+    },
+    {
+        "sequence": [
+            []
+        ],
+        "points2d": {},
+        "rig_positions": {},
+        "points3d": {},
+        "key_frames": [1, 10, 18, 26, 81]
+    }
+]
