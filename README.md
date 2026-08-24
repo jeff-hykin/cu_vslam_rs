@@ -64,15 +64,15 @@ Flakes that consume this one can take it as an input and use `cu-vslam-rs.packag
 
 ## macOS via CuMetal
 
-NVIDIA ships no macOS build. The `metal` SDK is `cuvslam/` compiled for Apple silicon with [CuMetal](https://github.com/jeff-hykin/cuda-metal), which maps the CUDA runtime and kernels onto Metal. The archive carries `libcumetal.dylib` and a prewarmed `share/cumetal-cache` of compiled metallibs; set `CUMETAL_PREBUILT_CACHE_DIR` to that directory so CuMetal can use the read-only store path as its lookup cache. Build scripts live at `cuvslam/cmake/CuMetal.cmake` and `cuvslam/scripts/package_cpp_dist_macos.sh`.
+NVIDIA ships no macOS build. The `metal` SDK is `cuvslam/` compiled for Apple silicon with [CuMetal](https://github.com/jeff-hykin/cuda-metal), which maps the CUDA runtime and kernels onto Metal. The archive carries `libcumetal.dylib` and a prewarmed `share/cumetal-cache` of compiled metallibs, which CuMetal finds by looking beside the `libcumetal.dylib` it was loaded from; `CUMETAL_PREBUILT_CACHE_DIR` overrides that search but is not needed. A cache is only valid for the exact `libcumetal.dylib` that produced it, so replacing that library means regenerating it with `cumetal_prewarm`. Build scripts live at `cuvslam/cmake/CuMetal.cmake` and `cuvslam/scripts/package_cpp_dist_macos.sh`.
 
 ## Determinism
 
 Upstream cuVSLAM seeds its visual-odometry RANSAC from `std::random_device`, so identical input produces slightly different trajectories run-to-run (~0.2 m rmse spread observed). This fork seeds it with a fixed constant (`cuvslam/libs/math/ransac.h`), matching the `seed(0)` that upstream's own SLAM `reproduce_mode` uses.
 
-`cargo test --test determinism` drives a synthetic scene twice and asserts the two trajectories match bit for bit and cover the commanded distance. Both assertions pass against `sdk-x86_64-cuda12`.
+`cargo test --test determinism` drives a synthetic scene twice and asserts the two trajectories match bit for bit and cover the commanded distance. Both assertions pass against `sdk-x86_64-cuda12` and against `sdk-metal` from `cuvslam-v17.0.0-metal.3` on.
 
-It needs an SDK that tracks, and the `metal` SDK does not: it returns identity for every frame in every odometry mode, including mono with no depth attached, so the distance assertion fails there.
+`cargo test --test metal_smoke` is the short version: one GPU-only stereo run with no CPU fallback. It asserts motion rather than status codes, because every CuMetal defect found so far reported success while returning the identity pose.
 
 ## License
 
