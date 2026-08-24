@@ -9,6 +9,20 @@
 #include <string>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <cstdlib>
+
+// cuVSLAM's feature detector samples cudaTextureObjects, and CuMetal implements one as a device
+// address the kernel dereferences. That only works when cudaMalloc hands out real Metal GPU
+// addresses, which is not CuMetal's default. Without it the samples read as zeros and nothing
+// reports an error: GFTT finds no corners, so the tracker re-initialises every other frame and
+// estimates no motion at all. The mode is read at allocation time, so it has to be set before
+// anything allocates. Overwrite is 0, so a deliberate setting still wins.
+__attribute__((constructor)) static void cuvslam_require_metal_device_addresses() {
+    setenv("CUMETAL_USE_METAL_DEVICE_ADDRESSES", "1", 0);
+}
+#endif
+
 namespace {
 
 void write_error(char* error_message, int32_t capacity, const char* text) {
