@@ -14,10 +14,12 @@ const FRAME_COUNT: usize = 24;
 const FRAME_INTERVAL_NS: i64 = 33_000_000;
 // Mostly sideways, because a forward-only walk gives the image centre almost no parallax.
 const RIG_STEP_METERS: [f32; 3] = [0.02, 0.0, 0.01];
+const BASELINE_METERS: f32 = 0.12;
 
 // cuVSLAM forbids concurrent calls into itself, and cargo runs test functions in parallel.
 static TRACKER_LOCK: Mutex<()> = Mutex::new(());
 static SEQUENCE: OnceLock<Vec<RgbdFrame>> = OnceLock::new();
+static STEREO_SEQUENCE: OnceLock<Vec<StereoFrame>> = OnceLock::new();
 
 struct Plane {
     normal: [f32; 3],
@@ -33,6 +35,12 @@ struct RgbdFrame {
     color: Vec<u8>,
     /// Metres, little-endian f32.
     depth: Vec<u8>,
+    timestamp_ns: i64,
+}
+
+struct StereoFrame {
+    left: Vec<u8>,
+    right: Vec<u8>,
     timestamp_ns: i64,
 }
 
@@ -141,6 +149,25 @@ fn rendered_sequence() -> &'static [RgbdFrame] {
     })
 }
 
+fn stereo_sequence() -> &'static [StereoFrame] {
+    STEREO_SEQUENCE.get_or_init(|| {
+        (0..FRAME_COUNT)
+            .map(|index| {
+                let step = index as f32;
+                let origin = [
+                    RIG_STEP_METERS[0] * step,
+                    RIG_STEP_METERS[1] * step,
+                    RIG_STEP_METERS[2] * step,
+                ];
+                let (left, _) = render_view(origin);
+                let (right, _) =
+                    render_view([origin[0] + BASELINE_METERS, origin[1], origin[2]]);
+                StereoFrame { left, right, timestamp_ns: index as i64 * FRAME_INTERVAL_NS }
+            })
+            .collect()
+    })
+}
+
 fn depth_camera() -> Vec<CameraParams> {
     vec![CameraParams {
         width: IMAGE_WIDTH,
@@ -154,6 +181,54 @@ fn depth_camera() -> Vec<CameraParams> {
         distortion_model: ffi::CUV_DISTORTION_PINHOLE,
         distortion_parameters: Vec::new(),
     }]
+}
+
+fn stereo_cameras() -> Vec<CameraParams> {
+    [[0.0, 0.0, 0.0], [BASELINE_METERS, 0.0, 0.0]]
+        .into_iter()
+        .map(|translation| CameraParams {
+            width: IMAGE_WIDTH,
+            height: IMAGE_HEIGHT,
+            principal: [PRINCIPAL_X, PRINCIPAL_Y],
+            focal: [FOCAL_PIXELS, FOCAL_PIXELS],
+            rig_from_camera: ffi::CuvPose {
+                rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                translation,
+            },
+            distortion_model: ffi::CUV_DISTORTION_PINHOLE,
+            distortion_parameters: Vec::new(),
+        })
+        .collect()
+}
+
+fn track_stereo_sequence<'a>(frames: &'a [StereoFrame]) -> Vec<PoseEstimate> {
+    let config = |use_gpu| ffi::CuvConfig {
+        odometry_mode: ffi::CUV_ODOMETRY_MULTICAMERA,
+        use_gpu,
+        rectified_stereo_camera: true,
+        rgbd_depth_scale_factor: 1.0,
+        rgbd_depth_camera_id: 0,
+    };
+    let mut tracker = Tracker::new(&stereo_cameras(), None, &config(true))
+        .or_else(|_| Tracker::new(&stereo_cameras(), None, &config(false)))
+        .expect("tracker creation failed");
+    frames
+        .iter()
+        .map(|frame| {
+            let image = |pixels: &'a [u8], camera_index| ImageRef {
+                pixels,
+                width: IMAGE_WIDTH,
+                height: IMAGE_HEIGHT,
+                encoding: ffi::CUV_ENCODING_MONO,
+                data_type: ffi::CUV_DATA_UINT8,
+                timestamp_ns: frame.timestamp_ns,
+                camera_index,
+            };
+            tracker
+                .track(&[image(&frame.left, 0), image(&frame.right, 1)], &[])
+                .expect("track failed")
+        })
+        .collect()
 }
 
 fn track_sequence(frames: &[RgbdFrame]) -> Vec<PoseEstimate> {
@@ -217,6 +292,22 @@ fn assert_tracking_really_happened(estimates: &[PoseEstimate]) {
 }
 
 #[test]
+fn the_stereo_tracker_locks_onto_the_synthetic_scene_and_follows_the_commanded_motion() {
+    let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_tracking_really_happened(&track_stereo_sequence(stereo_sequence()));
+}
+
+#[test]
+fn two_stereo_trackers_fed_the_same_sequence_produce_identical_poses() {
+    let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let frames = stereo_sequence();
+    let first_run = track_stereo_sequence(frames);
+    let second_run = track_stereo_sequence(frames);
+    assert_tracking_really_happened(&first_run);
+    assert_runs_match(&first_run, &second_run);
+}
+
+#[test]
 fn the_tracker_locks_onto_the_synthetic_scene_and_follows_the_commanded_motion() {
     let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_tracking_really_happened(&track_sequence(rendered_sequence()));
@@ -229,9 +320,12 @@ fn two_trackers_fed_the_same_sequence_produce_identical_poses() {
     let first_run = track_sequence(frames);
     let second_run = track_sequence(frames);
     assert_tracking_really_happened(&first_run);
+    assert_runs_match(&first_run, &second_run);
+}
 
+fn assert_runs_match(first_run: &[PoseEstimate], second_run: &[PoseEstimate]) {
     assert_eq!(first_run.len(), second_run.len());
-    for (index, (first, second)) in first_run.iter().zip(&second_run).enumerate() {
+    for (index, (first, second)) in first_run.iter().zip(second_run).enumerate() {
         assert_eq!(first.timestamp_ns, second.timestamp_ns, "frame {index} timestamp");
         match (first.world_from_rig, second.world_from_rig) {
             (Some((first_pose, first_covariance)), Some((second_pose, second_covariance))) => {
