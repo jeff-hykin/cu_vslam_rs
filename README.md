@@ -60,7 +60,9 @@ cargo build
 
 Flakes that consume this one can take it as an input and use `cu-vslam-rs.packages.${system}."sdk-<variant>"` as `CUVSLAM_SDK_DIR` for their own Rust builds.
 
-`x86_64-cuda12` and `orin` are compiled from `cuvslam/` in a sandboxed nix build (`ENFORCE_GPU=OFF`, so CPU/GPU is a runtime switch). `thor` uses NVIDIA's prebuilt tarball. `metal` uses a CuMetal build of `cuvslam/` hosted as a release artifact (`ENFORCE_GPU=ON`; the Metal path is the only backend).
+`x86_64-cuda12` and `orin` are compiled from `cuvslam/` in a sandboxed nix build. `thor` uses NVIDIA's prebuilt tarball. `metal` uses a CuMetal build of `cuvslam/` hosted as a release artifact, because prewarming its metallib cache needs Xcode's Metal compiler and so cannot run in the nix sandbox.
+
+Every variant we compile ourselves — `x86_64-cuda12`, `orin`, `metal` — is `ENFORCE_GPU=OFF`, so `use_gpu` selects the backend at runtime rather than at build time. On macOS that means `use_gpu: false` runs on the CPU and `true` runs through CuMetal, out of one library. One caveat applies on every platform: **RGBD needs the GPU.** cuVSLAM v17 lifts depth into landmarks only in a CUDA kernel (`lift_kernel`), with no CPU counterpart, so an RGBD tracker with `use_gpu: false` reports success while returning the identity pose. Stereo (`CUV_ODOMETRY_MULTICAMERA`) runs on either backend.
 
 ## macOS via CuMetal
 
@@ -70,7 +72,9 @@ NVIDIA ships no macOS build. The `metal` SDK is `cuvslam/` compiled for Apple si
 
 Upstream cuVSLAM seeds its visual-odometry RANSAC from `std::random_device`, so identical input produces slightly different trajectories run-to-run (~0.2 m rmse spread observed). This fork seeds it with a fixed constant (`cuvslam/libs/math/ransac.h`), matching the `seed(0)` that upstream's own SLAM `reproduce_mode` uses.
 
-`cargo test --test determinism` drives a synthetic scene twice and asserts the two trajectories match bit for bit and cover the commanded distance. Both assertions pass against `sdk-x86_64-cuda12` and against `sdk-metal` from `cuvslam-v17.0.0-metal.3` on.
+`cargo test --test determinism` drives a synthetic scene twice and asserts the two trajectories match bit for bit and cover the commanded distance, once per backend the SDK carries. Both assertions pass against `sdk-x86_64-cuda12` and against `sdk-metal` from `cuvslam-v17.0.0-metal.3` on. The RGBD cases only run on the GPU, for the reason above.
+
+Verify a Metal SDK the way another machine would see it: point `CUMETAL_CACHE_DIR` at an empty directory *and* unset `DEVELOPER_DIR`. That makes JIT impossible, so a passing run proves the bundled metallib cache was actually read rather than silently regenerated from a local Xcode.
 
 `cargo test --test metal_smoke` is the short version: one GPU-only stereo run with no CPU fallback. It asserts motion rather than status codes, because every CuMetal defect found so far reported success while returning the identity pose.
 

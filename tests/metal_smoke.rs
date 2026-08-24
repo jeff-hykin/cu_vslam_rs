@@ -20,8 +20,8 @@ fn track_gpu_stereo() -> Vec<[f32; 3]> {
         rgbd_depth_scale_factor: 1.0,
         rgbd_depth_camera_id: 0,
     };
-    // No CPU fallback: the Metal SDK is built ENFORCE_GPU=ON, so falling back could only ever
-    // hide a GPU failure behind a green test.
+    // No CPU fallback. The SDK now carries a CPU backend too, which is exactly why this has to be
+    // spelled out: falling back would turn a GPU failure into a green test.
     let mut tracker = Tracker::new(&common::stereo_cameras(), None, &config)
         .unwrap_or_else(|error| panic!("GPU tracker creation failed: {error}"));
     let frames = common::stereo_frames(FRAME_COUNT);

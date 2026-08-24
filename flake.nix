@@ -47,10 +47,11 @@
           };
           # Ours, since NVIDIA ships no macOS build: cuvslam/ compiled for Apple
           # silicon against CuMetal, targeting macOS 13 on apple-m1. It additionally
-          # carries libcumetal.dylib and share/cumetal-cache.
+          # carries libcumetal.dylib and share/cumetal-cache. ENFORCE_GPU=OFF like
+          # the fork builds below, so use_gpu is a runtime switch here too.
           metal = {
-            url = "https://github.com/jeff-hykin/cu_vslam_rs/releases/download/cuvslam-v17.0.0-metal.3/cuvslam-cpp-17.0.0-arm64-metal-macos.tar.gz";
-            hash = "sha256-vPPZZWv2SIGbN3tRC0OOYzCtJW4ejYZA/K5Ms8hk+8s=";
+            url = "https://github.com/jeff-hykin/cu_vslam_rs/releases/download/cuvslam-v17.0.0-metal.4/cuvslam-cpp-17.0.0-arm64-metal-macos.tar.gz";
+            hash = "sha256-sAtmtwXlT3UVi+NWv1r/ckUlMT+WQPJLSzb4AuZBELE=";
             system = "aarch64-darwin";
           };
         };
