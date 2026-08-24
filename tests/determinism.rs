@@ -201,17 +201,45 @@ fn stereo_cameras() -> Vec<CameraParams> {
         .collect()
 }
 
-fn track_stereo_sequence<'a>(frames: &'a [StereoFrame]) -> Vec<PoseEstimate> {
-    let config = |use_gpu| ffi::CuvConfig {
+fn stereo_config(use_gpu: bool) -> ffi::CuvConfig {
+    ffi::CuvConfig {
         odometry_mode: ffi::CUV_ODOMETRY_MULTICAMERA,
         use_gpu,
         rectified_stereo_camera: true,
         rgbd_depth_scale_factor: 1.0,
         rgbd_depth_camera_id: 0,
-    };
-    let mut tracker = Tracker::new(&stereo_cameras(), None, &config(true))
-        .or_else(|_| Tracker::new(&stereo_cameras(), None, &config(false)))
-        .expect("tracker creation failed");
+    }
+}
+
+fn depth_config(use_gpu: bool) -> ffi::CuvConfig {
+    ffi::CuvConfig {
+        odometry_mode: ffi::CUV_ODOMETRY_RGBD,
+        use_gpu,
+        rectified_stereo_camera: false,
+        rgbd_depth_scale_factor: 1.0,
+        rgbd_depth_camera_id: 0,
+    }
+}
+
+fn backend_name(use_gpu: bool) -> &'static str {
+    if use_gpu {
+        "GPU"
+    } else {
+        "CPU"
+    }
+}
+
+// An ENFORCE_GPU=ON SDK carries only its own backend and refuses to construct the other, so
+// which backends exist is a property of the SDK on disk. The tests used to fall back from GPU
+// to CPU without saying so, which let a GPU run stand in for a CPU determinism result.
+fn backend_is_available(use_gpu: bool) -> bool {
+    Tracker::new(&stereo_cameras(), None, &stereo_config(use_gpu)).is_ok()
+}
+
+fn track_stereo_sequence<'a>(frames: &'a [StereoFrame], use_gpu: bool) -> Vec<PoseEstimate> {
+    let backend = backend_name(use_gpu);
+    let mut tracker = Tracker::new(&stereo_cameras(), None, &stereo_config(use_gpu))
+        .unwrap_or_else(|error| panic!("{backend} tracker creation failed: {error}"));
     frames
         .iter()
         .map(|frame| {
@@ -231,18 +259,10 @@ fn track_stereo_sequence<'a>(frames: &'a [StereoFrame]) -> Vec<PoseEstimate> {
         .collect()
 }
 
-fn track_sequence(frames: &[RgbdFrame]) -> Vec<PoseEstimate> {
-    let config = |use_gpu| ffi::CuvConfig {
-        odometry_mode: ffi::CUV_ODOMETRY_RGBD,
-        use_gpu,
-        rectified_stereo_camera: false,
-        rgbd_depth_scale_factor: 1.0,
-        rgbd_depth_camera_id: 0,
-    };
-    // An ENFORCE_GPU=ON SDK carries only its own backend and refuses to construct the other.
-    let mut tracker = Tracker::new(&depth_camera(), None, &config(true))
-        .or_else(|_| Tracker::new(&depth_camera(), None, &config(false)))
-        .expect("tracker creation failed");
+fn track_sequence(frames: &[RgbdFrame], use_gpu: bool) -> Vec<PoseEstimate> {
+    let backend = backend_name(use_gpu);
+    let mut tracker = Tracker::new(&depth_camera(), None, &depth_config(use_gpu))
+        .unwrap_or_else(|error| panic!("{backend} tracker creation failed: {error}"));
     frames
         .iter()
         .map(|frame| {
@@ -291,36 +311,58 @@ fn assert_tracking_really_happened(estimates: &[PoseEstimate]) {
     );
 }
 
+fn on_every_backend(body: impl Fn(bool)) {
+    let mut ran_any = false;
+    for use_gpu in [false, true] {
+        if !backend_is_available(use_gpu) {
+            println!("skipping {}: not in this SDK", backend_name(use_gpu));
+            continue;
+        }
+        println!("running on {}", backend_name(use_gpu));
+        body(use_gpu);
+        ran_any = true;
+    }
+    assert!(ran_any, "this SDK carries neither backend");
+}
+
 #[test]
 fn the_stereo_tracker_locks_onto_the_synthetic_scene_and_follows_the_commanded_motion() {
     let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert_tracking_really_happened(&track_stereo_sequence(stereo_sequence()));
+    on_every_backend(|use_gpu| {
+        assert_tracking_really_happened(&track_stereo_sequence(stereo_sequence(), use_gpu));
+    });
 }
 
 #[test]
 fn two_stereo_trackers_fed_the_same_sequence_produce_identical_poses() {
     let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let frames = stereo_sequence();
-    let first_run = track_stereo_sequence(frames);
-    let second_run = track_stereo_sequence(frames);
-    assert_tracking_really_happened(&first_run);
-    assert_runs_match(&first_run, &second_run);
+    on_every_backend(|use_gpu| {
+        let frames = stereo_sequence();
+        let first_run = track_stereo_sequence(frames, use_gpu);
+        let second_run = track_stereo_sequence(frames, use_gpu);
+        assert_tracking_really_happened(&first_run);
+        assert_runs_match(&first_run, &second_run);
+    });
 }
 
 #[test]
 fn the_tracker_locks_onto_the_synthetic_scene_and_follows_the_commanded_motion() {
     let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert_tracking_really_happened(&track_sequence(rendered_sequence()));
+    on_every_backend(|use_gpu| {
+        assert_tracking_really_happened(&track_sequence(rendered_sequence(), use_gpu));
+    });
 }
 
 #[test]
 fn two_trackers_fed_the_same_sequence_produce_identical_poses() {
     let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let frames = rendered_sequence();
-    let first_run = track_sequence(frames);
-    let second_run = track_sequence(frames);
-    assert_tracking_really_happened(&first_run);
-    assert_runs_match(&first_run, &second_run);
+    on_every_backend(|use_gpu| {
+        let frames = rendered_sequence();
+        let first_run = track_sequence(frames, use_gpu);
+        let second_run = track_sequence(frames, use_gpu);
+        assert_tracking_really_happened(&first_run);
+        assert_runs_match(&first_run, &second_run);
+    });
 }
 
 fn assert_runs_match(first_run: &[PoseEstimate], second_run: &[PoseEstimate]) {
