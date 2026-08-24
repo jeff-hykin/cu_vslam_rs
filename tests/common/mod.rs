@@ -77,43 +77,72 @@ fn surface_brightness(point: [f32; 3]) -> u8 {
     (255.0 * contrasted) as u8
 }
 
+fn ray_direction(pixel_x: i32, pixel_y: i32) -> [f32; 3] {
+    [
+        (pixel_x as f32 - PRINCIPAL_X) / FOCAL_PIXELS,
+        (pixel_y as f32 - PRINCIPAL_Y) / FOCAL_PIXELS,
+        1.0,
+    ]
+}
+
+/// Distance along the ray to the nearest plane, and the point it lands on.
+fn nearest_surface(camera_origin: [f32; 3], direction: [f32; 3]) -> Option<(f32, [f32; 3])> {
+    let mut nearest = f32::MAX;
+    for plane in &SCENE_PLANES {
+        let along_ray = plane.normal[0] * direction[0]
+            + plane.normal[1] * direction[1]
+            + plane.normal[2] * direction[2];
+        if along_ray.abs() < 1e-6 {
+            continue;
+        }
+        let to_camera = plane.normal[0] * camera_origin[0]
+            + plane.normal[1] * camera_origin[1]
+            + plane.normal[2] * camera_origin[2];
+        let distance = (plane.offset - to_camera) / along_ray;
+        if distance > 0.3 && distance < nearest {
+            nearest = distance;
+        }
+    }
+    if nearest == f32::MAX {
+        return None;
+    }
+    Some((
+        nearest,
+        [
+            camera_origin[0] + nearest * direction[0],
+            camera_origin[1] + nearest * direction[1],
+            camera_origin[2] + nearest * direction[2],
+        ],
+    ))
+}
+
 pub fn render_gray(camera_origin: [f32; 3]) -> Vec<u8> {
     let mut color = vec![0u8; (IMAGE_WIDTH * IMAGE_HEIGHT) as usize];
     for pixel_y in 0..IMAGE_HEIGHT {
         for pixel_x in 0..IMAGE_WIDTH {
-            let direction = [
-                (pixel_x as f32 - PRINCIPAL_X) / FOCAL_PIXELS,
-                (pixel_y as f32 - PRINCIPAL_Y) / FOCAL_PIXELS,
-                1.0,
-            ];
-            let mut nearest = f32::MAX;
-            for plane in &SCENE_PLANES {
-                let along_ray = plane.normal[0] * direction[0]
-                    + plane.normal[1] * direction[1]
-                    + plane.normal[2] * direction[2];
-                if along_ray.abs() < 1e-6 {
-                    continue;
-                }
-                let to_camera = plane.normal[0] * camera_origin[0]
-                    + plane.normal[1] * camera_origin[1]
-                    + plane.normal[2] * camera_origin[2];
-                let distance = (plane.offset - to_camera) / along_ray;
-                if distance > 0.3 && distance < nearest {
-                    nearest = distance;
-                }
+            let direction = ray_direction(pixel_x, pixel_y);
+            if let Some((_, surface)) = nearest_surface(camera_origin, direction) {
+                color[(pixel_y * IMAGE_WIDTH + pixel_x) as usize] = surface_brightness(surface);
             }
-            if nearest == f32::MAX {
-                continue;
-            }
-            let surface = [
-                camera_origin[0] + nearest * direction[0],
-                camera_origin[1] + nearest * direction[1],
-                camera_origin[2] + nearest * direction[2],
-            ];
-            color[(pixel_y * IMAGE_WIDTH + pixel_x) as usize] = surface_brightness(surface);
         }
     }
     color
+}
+
+/// Little-endian f32 metres along the optical axis, not along the ray, which is what RGBD wants.
+pub fn render_depth(camera_origin: [f32; 3]) -> Vec<u8> {
+    let mut depth = vec![0u8; (IMAGE_WIDTH * IMAGE_HEIGHT) as usize * 4];
+    for pixel_y in 0..IMAGE_HEIGHT {
+        for pixel_x in 0..IMAGE_WIDTH {
+            let direction = ray_direction(pixel_x, pixel_y);
+            if let Some((distance, _)) = nearest_surface(camera_origin, direction) {
+                let index = (pixel_y * IMAGE_WIDTH + pixel_x) as usize;
+                let along_axis = distance * direction[2];
+                depth[index * 4..index * 4 + 4].copy_from_slice(&along_axis.to_le_bytes());
+            }
+        }
+    }
+    depth
 }
 
 pub fn stereo_frames(count: usize) -> Vec<StereoFrame> {
