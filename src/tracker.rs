@@ -1,8 +1,7 @@
 // Copyright 2026 Dimensional Inc.
 // SPDX-License-Identifier: LicenseRef-NVIDIA-Community
 //
-// Safe wrapper around the cuVSLAM shim: owns the tracker handle, turns error
-// buffers into Result<_, String>, keeps the raw pointers behind slices.
+// Safe wrapper around the cuVSLAM shim.
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
@@ -41,8 +40,7 @@ pub struct Tracker {
     raw: *mut ffi::CuvTracker,
 }
 
-// The module serializes all tracker calls on its one event loop; cuVSLAM itself
-// only forbids concurrent calls, not cross-thread ownership.
+// cuVSLAM forbids concurrent calls, not cross-thread ownership.
 unsafe impl Send for Tracker {}
 
 fn error_string(buffer: &[c_char]) -> String {

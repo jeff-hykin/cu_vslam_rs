@@ -66,6 +66,7 @@ pub const CUV_ENCODING_MONO: u8 = 0;
 pub const CUV_ENCODING_RGB: u8 = 1;
 pub const CUV_DATA_UINT8: u8 = 0;
 pub const CUV_DATA_UINT16: u8 = 1;
+pub const CUV_DATA_FLOAT32: u8 = 2;
 
 #[repr(C)]
 pub struct CuvImage {
