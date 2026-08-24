@@ -3,7 +3,7 @@
 
 [package]
 name = "cu_vslam_rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license-file = "LICENSE"
 description = "Rust FFI for NVIDIA cuVSLAM visual odometry: raw bindings plus a safe Tracker wrapper. Requires a cuVSLAM SDK at build time (CUVSLAM_SDK_DIR); the repository's nix flake provides one per platform."
