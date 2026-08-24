@@ -38,8 +38,7 @@
             system = "aarch64-linux";
             cuda = "cudaPackages_12_6";
           };
-          # Jetson Thor, sm_110, JetPack 7. A different GPU generation from Orin, so
-          # its build is not interchangeable with one.
+          # Jetson Thor, sm_110, JetPack 7.
           thor = {
             url = "https://github.com/nvidia-isaac/cuVSLAM/releases/download/v17.0.0/cuvslam-cpp-17.0.0-thor-cuda13.0.1-ubuntu24.04.tar.gz";
             hash = "sha256-w5b476aY+oS8XVQn9EodgwXf8nrhnD9aioykLSoZTT8=";
@@ -182,10 +181,8 @@
           meta.license = pkgs.lib.licenses.unfree;  # NVIDIA Community License
         };
 
-        # Same output shape as sdkFor, but compiled from cuvslam/ in this repo. Built
-        # with ENFORCE_GPU=OFF so one library carries both the CUDA and CPU paths and
-        # a use_gpu config is a pure runtime switch. Only the library target is
-        # built: tools, examples, and tests stay out of the closure.
+        # Same output shape as sdkFor, compiled from cuvslam/. ENFORCE_GPU=OFF so one
+        # library carries both backends and use_gpu becomes a runtime switch.
         forkSdkFor = name: fork: let
           cudaSet = pkgs.${fork.cuda};
           deps = forkDepsFor fork;
@@ -230,23 +227,20 @@
         };
 
         forThisSystem = pkgs.lib.filterAttrs (_: sdk: sdk.system == system) sdks;
-        # What a machine that says nothing about itself gets. CUDA 12 on both linux
-        # arches: it is what the drivers in the field are, and a 13 driver runs a 12
-        # build.
+        # CUDA 12 on both linux arches: it is what the drivers in the field are, and
+        # a 13 driver runs a 12 build.
         defaultVariant = {
           aarch64-darwin = "metal";
           aarch64-linux = "orin";
         }.${system} or "x86_64-cuda12";
 
-        # Fork-built variants override the tarball, and their newer CUDA set wins for
-        # a consumer's runtime libs.
+        # Fork-built variants override the tarball.
         sdkPackageFor = name: sdk:
           if forkBuilds ? ${name} then forkSdkFor name forkBuilds.${name} else sdkFor name sdk;
 
         defaultSdk = sdkPackageFor defaultVariant forThisSystem.${defaultVariant};
 
-        # The crate itself, linked against a given SDK. Consumers that want a
-        # different variant set CUVSLAM_SDK_DIR themselves.
+        # The crate, linked against a given SDK.
         crateFor = sdkPackage: pkgs.rustPlatform.buildRustPackage {
           pname = "cu_vslam_rs";
           version = "0.1.0";
@@ -268,8 +262,7 @@
           }) forThisSystem
           // { default = defaultSdk; };
 
-        # Library crate, so the build output is empty; this is a compile check
-        # that the shim and bindings link against the default SDK.
+        # A compile check: the shim and bindings link against the default SDK.
         checks.crate = crateFor defaultSdk;
 
         devShells.default = pkgs.mkShell {

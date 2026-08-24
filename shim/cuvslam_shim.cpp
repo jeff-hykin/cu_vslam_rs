@@ -3,6 +3,7 @@
 #include <cuvslam/cuvslam2.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <string>

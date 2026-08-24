@@ -68,7 +68,9 @@ NVIDIA ships no macOS build. The `metal` SDK is `cuvslam/` compiled for Apple si
 
 ## Determinism
 
-Upstream cuVSLAM seeds its visual-odometry RANSAC from `std::random_device`, so identical input produces slightly different trajectories run-to-run (~0.2 m rmse spread observed). This fork seeds it with a fixed constant (`cuvslam/libs/math/ransac.h`), matching the `seed(0)` that upstream's own SLAM `reproduce_mode` uses, making VO deterministic on the CPU and CuMetal paths.
+Upstream cuVSLAM seeds its visual-odometry RANSAC from `std::random_device`, so identical input produces slightly different trajectories run-to-run (~0.2 m rmse spread observed). This fork seeds it with a fixed constant (`cuvslam/libs/math/ransac.h`), matching the `seed(0)` that upstream's own SLAM `reproduce_mode` uses.
+
+`cargo test --test determinism` drives a synthetic scene twice and asserts the two trajectories match bit for bit and cover the commanded distance. It needs an SDK that tracks: the `metal` SDK returns identity for every frame in every odometry mode, including mono with no depth attached, so the distance assertion fails there.
 
 ## License
 

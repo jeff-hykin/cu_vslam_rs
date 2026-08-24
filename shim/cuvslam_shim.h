@@ -1,5 +1,4 @@
 // Thin extern-"C" shim over the cuVSLAM C++ API (cuvslam2.h).
-// Only wraps the surface used by the odometry module: construct, Track, RegisterImuMeasurement.
 #pragma once
 
 #include <stdbool.h>
