@@ -268,6 +268,17 @@
         devShells.default = pkgs.mkShell {
           packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt ];
           CUVSLAM_SDK_DIR = defaultSdk;
+          # Jetson CUDA is host-provided and nix's glibc does not read the system ld.so.cache,
+          # so both halves have to be named here. Without the driver dir cudart finds no
+          # libcuda.so.1 at all and reports it as one too old for the runtime; without JetPack's
+          # own math libraries winning over nixpkgs', cusolverDnCreate fails on the iGPU.
+          LD_LIBRARY_PATH = pkgs.lib.optionalString (system == "aarch64-linux") (
+            pkgs.lib.concatStringsSep ":" [
+              "/usr/lib/aarch64-linux-gnu/nvidia"
+              "/usr/lib/aarch64-linux-gnu/tegra"
+              "/usr/local/cuda/targets/aarch64-linux/lib"
+            ]
+          );
         };
       });
 }
