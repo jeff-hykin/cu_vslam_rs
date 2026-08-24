@@ -173,18 +173,28 @@ fn assert_tracking_really_happened(estimates: &[PoseEstimate]) {
     );
 }
 
-fn on_every_backend(body: impl Fn(bool)) {
+fn run_on(backends: &[bool], body: impl Fn(bool)) {
     let mut ran_any = false;
-    for use_gpu in [false, true] {
+    for &use_gpu in backends {
         if !backend_is_available(use_gpu) {
-            println!("skipping {}: not in this SDK", backend_name(use_gpu));
+            println!("skipping {}: not available here", backend_name(use_gpu));
             continue;
         }
         println!("running on {}", backend_name(use_gpu));
         body(use_gpu);
         ran_any = true;
     }
-    assert!(ran_any, "this SDK carries neither backend");
+    assert!(ran_any, "no requested backend is available here");
+}
+
+fn on_every_backend(body: impl Fn(bool)) {
+    run_on(&[false, true], body);
+}
+
+// cuVSLAM lifts depth pixels to points only in a CUDA kernel, so an RGBD tracker built with
+// use_gpu=false finds no landmarks and reports no motion at all.
+fn on_gpu_only(body: impl Fn(bool)) {
+    run_on(&[true], body);
 }
 
 #[test]
@@ -210,7 +220,7 @@ fn two_stereo_trackers_fed_the_same_sequence_produce_identical_poses() {
 #[test]
 fn the_tracker_locks_onto_the_synthetic_scene_and_follows_the_commanded_motion() {
     let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    on_every_backend(|use_gpu| {
+    on_gpu_only(|use_gpu| {
         assert_tracking_really_happened(&track_sequence(rendered_sequence(), use_gpu));
     });
 }
@@ -218,7 +228,7 @@ fn the_tracker_locks_onto_the_synthetic_scene_and_follows_the_commanded_motion()
 #[test]
 fn two_trackers_fed_the_same_sequence_produce_identical_poses() {
     let _serialized = TRACKER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    on_every_backend(|use_gpu| {
+    on_gpu_only(|use_gpu| {
         let frames = rendered_sequence();
         let first_run = track_sequence(frames, use_gpu);
         let second_run = track_sequence(frames, use_gpu);
