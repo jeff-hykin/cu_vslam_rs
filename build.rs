@@ -22,4 +22,7 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=cuvslam");
     // libcuvslam's install name is @rpath/libcuvslam.dylib on macOS; embed the SDK path.
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+    // rustc-link-arg applies only to this package, so a dependent binary needs its own
+    // rpath. `links = "cuvslam"` turns this into DEP_CUVSLAM_LIB_DIR in their build script.
+    println!("cargo:lib_dir={}", lib_dir.display());
 }
