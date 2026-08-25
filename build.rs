@@ -5,10 +5,14 @@ fn main() {
     println!("cargo:rerun-if-changed=shim/cuvslam_shim.h");
     println!("cargo:rerun-if-changed=shim/cuvslam_shim.cpp");
     println!("cargo:rerun-if-env-changed=CUVSLAM_SDK_DIR");
+    println!("cargo:rustc-check-cfg=cfg(cuvslam_stub)");
 
-    let sdk_dir = PathBuf::from(
-        env::var("CUVSLAM_SDK_DIR").expect("set CUVSLAM_SDK_DIR to a cuVSLAM SDK (include/cuvslam/cuvslam2.h + lib/)"),
-    );
+    let Ok(sdk_dir) = env::var("CUVSLAM_SDK_DIR").map(PathBuf::from) else {
+        // No SDK: compile the stub, whose Tracker::new always errors, so plain
+        // `cargo check`/`clippy`/`test` work on machines without cuVSLAM.
+        println!("cargo:rustc-cfg=cuvslam_stub");
+        return;
+    };
 
     cc::Build::new()
         .cpp(true)

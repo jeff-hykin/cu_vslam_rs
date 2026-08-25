@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Rust FFI for [cuVSLAM](https://github.com/nvidia-isaac/cuVSLAM). Linking needs
-//! `CUVSLAM_SDK_DIR`; see the README.
+//! `CUVSLAM_SDK_DIR` (see the README); without it the crate still compiles, as a stub
+//! whose [`Tracker::new`] always errors, so SDK-less checks and tests work.
 
 pub mod ffi;
 mod tracker;
