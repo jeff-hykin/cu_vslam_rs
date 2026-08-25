@@ -3,10 +3,10 @@
 
 [package]
 name = "cu_vslam_rs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license-file = "LICENSE"
-description = "Rust FFI for NVIDIA cuVSLAM visual odometry: raw bindings plus a safe Tracker wrapper. Requires a cuVSLAM SDK at build time (CUVSLAM_SDK_DIR); the repository's nix flake provides one per platform."
+description = "Rust FFI for NVIDIA cuVSLAM visual odometry: raw bindings plus a safe Tracker wrapper. Tracking requires a cuVSLAM SDK at build time (CUVSLAM_SDK_DIR); without one the crate compiles as a stub whose Tracker::new errors. The repository's nix flake provides SDKs per platform."
 repository = "https://github.com/jeff-hykin/cu_vslam_rs"
 keywords = ["cuvslam", "vslam", "visual-odometry", "slam", "robotics"]
 categories = ["science::robotics", "external-ffi-bindings"]

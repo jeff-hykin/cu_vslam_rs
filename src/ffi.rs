@@ -100,6 +100,7 @@ pub struct CuvTracker {
     _private: [u8; 0],
 }
 
+#[cfg(not(cuvslam_stub))]
 extern "C" {
     pub fn cuv_tracker_create(
         cameras: *const CuvCamera,
@@ -131,3 +132,69 @@ extern "C" {
 
     pub fn cuv_tracker_destroy(tracker: *mut CuvTracker);
 }
+
+// Built when CUVSLAM_SDK_DIR is absent (see build.rs): same signatures, no SDK. Only
+// cuv_tracker_create is reachable, so the others never run.
+#[cfg(cuvslam_stub)]
+#[allow(clippy::too_many_arguments)] // signatures mirror the C API
+mod stub {
+    use super::*;
+
+    unsafe fn write_error(error_message: *mut c_char, capacity: i32) -> i32 {
+        if capacity <= 0 {
+            return 1;
+        }
+        let message = "cu_vslam_rs was built without CUVSLAM_SDK_DIR; this stub cannot track";
+        let writable = (capacity as usize - 1).min(message.len());
+        std::ptr::copy_nonoverlapping(message.as_ptr() as *const c_char, error_message, writable);
+        *error_message.add(writable) = 0;
+        1
+    }
+
+    /// # Safety
+    /// Mirrors the real binding: `error_message` must point to `error_message_capacity` bytes.
+    pub unsafe fn cuv_tracker_create(
+        _cameras: *const CuvCamera,
+        _camera_count: i32,
+        _imu_or_null: *const CuvImuCalibration,
+        _config: *const CuvConfig,
+        _out_tracker: *mut *mut CuvTracker,
+        error_message: *mut c_char,
+        error_message_capacity: i32,
+    ) -> i32 {
+        write_error(error_message, error_message_capacity)
+    }
+
+    /// # Safety
+    /// Mirrors the real binding: `error_message` must point to `error_message_capacity` bytes.
+    pub unsafe fn cuv_tracker_track(
+        _tracker: *mut CuvTracker,
+        _images: *const CuvImage,
+        _image_count: i32,
+        _depths: *const CuvImage,
+        _depth_count: i32,
+        _out_estimate: *mut CuvPoseEstimate,
+        error_message: *mut c_char,
+        error_message_capacity: i32,
+    ) -> i32 {
+        write_error(error_message, error_message_capacity)
+    }
+
+    /// # Safety
+    /// Mirrors the real binding: `error_message` must point to `error_message_capacity` bytes.
+    pub unsafe fn cuv_tracker_register_imu(
+        _tracker: *mut CuvTracker,
+        _measurement: *const CuvImuMeasurement,
+        error_message: *mut c_char,
+        error_message_capacity: i32,
+    ) -> i32 {
+        write_error(error_message, error_message_capacity)
+    }
+
+    /// # Safety
+    /// Callable with any pointer; the stub ignores it.
+    pub unsafe fn cuv_tracker_destroy(_tracker: *mut CuvTracker) {}
+}
+
+#[cfg(cuvslam_stub)]
+pub use stub::*;
