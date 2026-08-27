@@ -50,8 +50,8 @@
           # carries libcumetal.dylib and share/cumetal-cache. ENFORCE_GPU=OFF like
           # the fork builds below, so use_gpu is a runtime switch here too.
           metal = {
-            url = "https://github.com/jeff-hykin/cu_vslam_rs/releases/download/cuvslam-v17.0.0-metal.4/cuvslam-cpp-17.0.0-arm64-metal-macos.tar.gz";
-            hash = "sha256-sAtmtwXlT3UVi+NWv1r/ckUlMT+WQPJLSzb4AuZBELE=";
+            url = "https://github.com/jeff-hykin/cu_vslam_rs/releases/download/cuvslam-v17.0.0-metal.5/cuvslam-cpp-17.0.0-arm64-metal-macos.tar.gz";
+            hash = "sha256-ugma/HyDi7caSXwVCMCtZB3MAi93BWbMcbvSrLYL1Xw=";
             system = "aarch64-darwin";
           };
         };

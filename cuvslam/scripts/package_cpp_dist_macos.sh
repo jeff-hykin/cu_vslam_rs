@@ -103,7 +103,9 @@ DYLD_LIBRARY_PATH="$staging_dir/bin" \
 cp "$prewarm_cache"/registration-jit/* "$cache_dir/"
 
 mkdir -p "$(dirname "$ARCHIVE_PATH")"
-tar -czf "$ARCHIVE_PATH" -C "$staging_dir" .
+# Without COPYFILE_DISABLE, macOS tar embeds each file's xattrs (com.apple.provenance)
+# as AppleDouble ._* members, which GNU tar extracts as junk 163-byte files.
+COPYFILE_DISABLE=1 tar -czf "$ARCHIVE_PATH" -C "$staging_dir" .
 
 echo "Created $ARCHIVE_PATH"
 tar -tzf "$ARCHIVE_PATH" | sed 's#^\./##' | awk 'NF && !/\/$/' | LC_ALL=C sort

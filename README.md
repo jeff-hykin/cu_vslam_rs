@@ -68,6 +68,8 @@ Every variant we compile ourselves — `x86_64-cuda12`, `orin`, `metal` — is `
 
 NVIDIA ships no macOS build. The `metal` SDK is `cuvslam/` compiled for Apple silicon with [CuMetal](https://github.com/jeff-hykin/cuda-metal), which maps the CUDA runtime and kernels onto Metal. The archive carries `libcumetal.dylib` and a prewarmed `share/cumetal-cache` of compiled metallibs, which CuMetal finds by looking beside the `libcumetal.dylib` it was loaded from; `CUMETAL_PREBUILT_CACHE_DIR` overrides that search but is not needed. A cache is only valid for the exact `libcumetal.dylib` that produced it, so replacing that library means regenerating it with `cumetal_prewarm`. Build scripts live at `cuvslam/cmake/CuMetal.cmake` and `cuvslam/scripts/package_cpp_dist_macos.sh`.
 
+CuMetal always creates its writable cache directory on first use — `~/Library/Caches/io.cumetal/registration-jit/`, or `$CUMETAL_CACHE_DIR` if set — even when the prebuilt cache serves every kernel. An empty `registration-jit/` after a run is expected, not a sign the bundled cache was ignored.
+
 ## Determinism
 
 Upstream cuVSLAM seeds its visual-odometry RANSAC from `std::random_device`, so identical input produces slightly different trajectories run-to-run (~0.2 m rmse spread observed). This fork seeds it with a fixed constant (`cuvslam/libs/math/ransac.h`), matching the `seed(0)` that upstream's own SLAM `reproduce_mode` uses.
