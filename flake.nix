@@ -153,6 +153,10 @@
             cp bin/libcuvslam.so $out/lib/
             cp bin/cuvslam_api_launcher $out/bin/ || true
             cp -r include/cuvslam $out/include/
+            # cuvslam2.h declares GetVersion(int32_t*) but includes only <cstddef>, so it
+            # relied on <cstdint> arriving through another libstdc++ header. gcc 15 stopped
+            # leaking it, and every error after the undeclared type is cascade from this.
+            sed -i '/#include <cstddef>/a #include <cstdint>' $out/include/cuvslam/cuvslam2.h
             # The NVIDIA Community License requires this to travel with the binary.
             cp LICENSE $out/share/cuvslam/
             echo "Licensed by NVIDIA Corporation under the NVIDIA Community License." \
