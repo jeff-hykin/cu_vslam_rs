@@ -62,8 +62,8 @@ struct CuvTracker {
 extern "C" {
 
 int32_t cuv_tracker_create(const CuvCamera* cameras, int32_t camera_count, const CuvImuCalibration* imu_or_null,
-                           const CuvConfig* config, CuvTracker** out_tracker, char* error_message,
-                           int32_t error_message_capacity) {
+                           const int32_t* depth_camera_ids, int32_t depth_camera_id_count, const CuvConfig* config,
+                           CuvTracker** out_tracker, char* error_message, int32_t error_message_capacity) {
     try {
         cuvslam::Rig rig;
         for (int32_t index = 0; index < camera_count; index++) {
@@ -97,6 +97,11 @@ int32_t cuv_tracker_create(const CuvCamera* cameras, int32_t camera_count, const
         cuvslam_config.rectified_stereo_camera = config->rectified_stereo_camera;
         cuvslam_config.rgbd_settings.depth_scale_factor = config->rgbd_depth_scale_factor;
         cuvslam_config.rgbd_settings.depth_camera_id = config->rgbd_depth_camera_id;
+        cuvslam_config.multisensor_settings.depth_camera_ids.assign(depth_camera_ids,
+                                                                   depth_camera_ids + depth_camera_id_count);
+        cuvslam_config.multisensor_settings.depth_scale_factor = config->multisensor_depth_scale_factor;
+        cuvslam_config.multisensor_settings.enable_depth_stereo_tracking =
+            config->multisensor_depth_stereo_tracking;
 
         *out_tracker = new CuvTracker{cuvslam::Odometry(rig, cuvslam_config)};
         return 0;

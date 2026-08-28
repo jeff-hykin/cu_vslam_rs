@@ -49,6 +49,10 @@ enum {
     CUV_ODOMETRY_INERTIAL = 1,
     CUV_ODOMETRY_RGBD = 2,
     CUV_ODOMETRY_MONO = 3,
+    // Experimental in cuVSLAM, and only in a build carrying cuNLS. Any mix of RGB and
+    // RGB-D cameras plus an optional IMU; the depth_camera_ids passed to
+    // cuv_tracker_create say which cameras carry depth.
+    CUV_ODOMETRY_MULTISENSOR = 4,
 };
 
 typedef struct {
@@ -57,6 +61,11 @@ typedef struct {
     bool rectified_stereo_camera;
     float rgbd_depth_scale_factor;
     int32_t rgbd_depth_camera_id;
+    // Multisensor: one scale for every depth camera, so a rig whose sensors disagree on
+    // depth units has to convert before this point.
+    float multisensor_depth_scale_factor;
+    // Multisensor: 2D tracks between a depth-aligned camera and the rest of the rig.
+    bool multisensor_depth_stereo_tracking;
 } CuvConfig;
 
 // encoding values match cuvslam::ImageData::Encoding, data_type matches DataType
@@ -96,9 +105,10 @@ typedef struct {
 // All functions return 0 on success. On failure they return nonzero and write a
 // NUL-terminated message into error_message (truncated to error_message_capacity).
 
+// depth_camera_ids index into cameras and are read in multisensor mode only.
 int32_t cuv_tracker_create(const CuvCamera* cameras, int32_t camera_count, const CuvImuCalibration* imu_or_null,
-                           const CuvConfig* config, CuvTracker** out_tracker, char* error_message,
-                           int32_t error_message_capacity);
+                           const int32_t* depth_camera_ids, int32_t depth_camera_id_count, const CuvConfig* config,
+                           CuvTracker** out_tracker, char* error_message, int32_t error_message_capacity);
 
 int32_t cuv_tracker_track(CuvTracker* tracker, const CuvImage* images, int32_t image_count, const CuvImage* depths,
                           int32_t depth_count, CuvPoseEstimate* out_estimate, char* error_message,

@@ -32,7 +32,7 @@ $CUVSLAM_SDK_DIR/
 ```rust
 use cu_vslam_rs::{CameraParams, ImageRef, Tracker, ffi};
 
-let mut tracker = Tracker::new(&cameras, imu_calibration.as_ref(), &config)?;
+let mut tracker = Tracker::new(&cameras, imu_calibration.as_ref(), &depth_camera_ids, &config)?;
 let estimate = tracker.track(&images, &depths)?;
 if let Some((world_from_rig, covariance)) = estimate.world_from_rig {
     // pose is valid; None while tracking is lost

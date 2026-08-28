@@ -51,6 +51,7 @@ pub const CUV_ODOMETRY_MULTICAMERA: u8 = 0;
 pub const CUV_ODOMETRY_INERTIAL: u8 = 1;
 pub const CUV_ODOMETRY_RGBD: u8 = 2;
 pub const CUV_ODOMETRY_MONO: u8 = 3;
+pub const CUV_ODOMETRY_MULTISENSOR: u8 = 4;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -60,6 +61,8 @@ pub struct CuvConfig {
     pub rectified_stereo_camera: bool,
     pub rgbd_depth_scale_factor: f32,
     pub rgbd_depth_camera_id: i32,
+    pub multisensor_depth_scale_factor: f32,
+    pub multisensor_depth_stereo_tracking: bool,
 }
 
 pub const CUV_ENCODING_MONO: u8 = 0;
@@ -106,6 +109,8 @@ extern "C" {
         cameras: *const CuvCamera,
         camera_count: i32,
         imu_or_null: *const CuvImuCalibration,
+        depth_camera_ids: *const i32,
+        depth_camera_id_count: i32,
         config: *const CuvConfig,
         out_tracker: *mut *mut CuvTracker,
         error_message: *mut c_char,
@@ -157,6 +162,8 @@ mod stub {
         _cameras: *const CuvCamera,
         _camera_count: i32,
         _imu_or_null: *const CuvImuCalibration,
+        _depth_camera_ids: *const i32,
+        _depth_camera_id_count: i32,
         _config: *const CuvConfig,
         _out_tracker: *mut *mut CuvTracker,
         error_message: *mut c_char,

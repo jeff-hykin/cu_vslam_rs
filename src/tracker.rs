@@ -67,14 +67,24 @@ fn to_ffi_image(image: &ImageRef) -> ffi::CuvImage {
 fn check_rig(
     cameras: &[CameraParams],
     imu: Option<&ffi::CuvImuCalibration>,
+    depth_camera_ids: &[i32],
     config: &ffi::CuvConfig,
 ) -> Result<(), String> {
+    let multisensor = config.odometry_mode == ffi::CUV_ODOMETRY_MULTISENSOR;
     let minimum_cameras = match config.odometry_mode {
         ffi::CUV_ODOMETRY_MONO | ffi::CUV_ODOMETRY_RGBD => 1,
         ffi::CUV_ODOMETRY_MULTICAMERA | ffi::CUV_ODOMETRY_INERTIAL => 2,
+        // Depth or an overlapping pair; with neither there is no scale to track against.
+        ffi::CUV_ODOMETRY_MULTISENSOR => {
+            if depth_camera_ids.is_empty() {
+                2
+            } else {
+                1
+            }
+        }
         other => {
             return Err(format!(
-                "odometry_mode {other} is not one of cuVSLAM's four modes"
+                "odometry_mode {other} is not one of cuVSLAM's five modes"
             ))
         }
     };
@@ -85,15 +95,53 @@ fn check_rig(
             cameras.len()
         ));
     }
-    // The calibration reaches the rig either way, but only Inertial reads it.
-    if imu.is_some() != (config.odometry_mode == ffi::CUV_ODOMETRY_INERTIAL) {
+    // The calibration reaches the rig either way, but only these two modes read it, and
+    // Inertial has nothing to integrate without one.
+    let imu_is_usable = config.odometry_mode == ffi::CUV_ODOMETRY_INERTIAL || multisensor;
+    if imu.is_some() && !imu_is_usable {
         return Err(format!(
-            "an IMU calibration is used by odometry_mode {} alone, and is required there; \
-             got mode {} with imu {}",
-            ffi::CUV_ODOMETRY_INERTIAL,
+            "odometry_mode {} ignores an IMU calibration; only modes {} and {} read one",
             config.odometry_mode,
-            if imu.is_some() { "set" } else { "unset" }
+            ffi::CUV_ODOMETRY_INERTIAL,
+            ffi::CUV_ODOMETRY_MULTISENSOR
         ));
+    }
+    if imu.is_none() && config.odometry_mode == ffi::CUV_ODOMETRY_INERTIAL {
+        return Err(format!(
+            "odometry_mode {} has nothing to integrate without an IMU calibration",
+            ffi::CUV_ODOMETRY_INERTIAL
+        ));
+    }
+    if !multisensor && !depth_camera_ids.is_empty() {
+        return Err(format!(
+            "depth_camera_ids is read by odometry_mode {} alone, so the {} ids given for \
+             mode {} would be dropped",
+            ffi::CUV_ODOMETRY_MULTISENSOR,
+            depth_camera_ids.len(),
+            config.odometry_mode
+        ));
+    }
+    if multisensor && !depth_camera_ids.is_empty() {
+        for (position, id) in depth_camera_ids.iter().enumerate() {
+            if !(0..cameras.len() as i32).contains(id) {
+                return Err(format!(
+                    "depth_camera_ids[{position}] is {id}, outside the {} cameras of the rig",
+                    cameras.len()
+                ));
+            }
+            if depth_camera_ids[..position].contains(id) {
+                return Err(format!(
+                    "depth_camera_ids names camera {id} twice, so one of its depth images \
+                     would go unmatched"
+                ));
+            }
+        }
+        let scale = config.multisensor_depth_scale_factor;
+        if !(scale > 0.0 && scale.is_finite()) {
+            return Err(format!(
+                "multisensor_depth_scale_factor must be positive and finite, got {scale}"
+            ));
+        }
     }
     if config.odometry_mode == ffi::CUV_ODOMETRY_RGBD {
         // Its -1 default is in range for cuVSLAM and means no camera, so depth is dropped.
@@ -116,12 +164,14 @@ fn check_rig(
 }
 
 impl Tracker {
+    /// `depth_camera_ids` index into `cameras` and are read in multisensor mode only.
     pub fn new(
         cameras: &[CameraParams],
         imu: Option<&ffi::CuvImuCalibration>,
+        depth_camera_ids: &[i32],
         config: &ffi::CuvConfig,
     ) -> Result<Self, String> {
-        check_rig(cameras, imu, config)?;
+        check_rig(cameras, imu, depth_camera_ids, config)?;
         let ffi_cameras: Vec<ffi::CuvCamera> = cameras
             .iter()
             .map(|camera| ffi::CuvCamera {
@@ -142,6 +192,8 @@ impl Tracker {
                 ffi_cameras.as_ptr(),
                 ffi_cameras.len() as i32,
                 imu.map_or(std::ptr::null(), |calibration| calibration as *const _),
+                depth_camera_ids.as_ptr(),
+                depth_camera_ids.len() as i32,
                 config,
                 &mut raw,
                 error.as_mut_ptr(),
@@ -191,12 +243,15 @@ impl Tracker {
     }
 
     pub fn register_imu(&mut self, measurement: &ffi::CuvImuMeasurement) -> Result<(), String> {
-        // cuVSLAM accepts the measurement in any mode and only integrates it in Inertial.
-        if self.odometry_mode != ffi::CUV_ODOMETRY_INERTIAL {
+        // cuVSLAM accepts the measurement in any mode and only integrates it in these two.
+        if self.odometry_mode != ffi::CUV_ODOMETRY_INERTIAL
+            && self.odometry_mode != ffi::CUV_ODOMETRY_MULTISENSOR
+        {
             return Err(format!(
-                "odometry_mode {} does not read IMU measurements; only mode {} does",
+                "odometry_mode {} does not read IMU measurements; only modes {} and {} do",
                 self.odometry_mode,
-                ffi::CUV_ODOMETRY_INERTIAL
+                ffi::CUV_ODOMETRY_INERTIAL,
+                ffi::CUV_ODOMETRY_MULTISENSOR
             ));
         }
         let mut error = [0 as c_char; ERROR_CAPACITY];
@@ -239,19 +294,21 @@ mod tests {
             rectified_stereo_camera: true,
             rgbd_depth_scale_factor: 1000.0,
             rgbd_depth_camera_id: 0,
+            multisensor_depth_scale_factor: 1000.0,
+            multisensor_depth_stereo_tracking: false,
         }
     }
 
     #[test]
-    fn an_imu_is_refused_outside_inertial_mode() {
+    fn an_imu_is_refused_outside_the_modes_that_read_one() {
         let calibration = ffi::CuvImuCalibration::default();
         for mode in [
             ffi::CUV_ODOMETRY_MULTICAMERA,
             ffi::CUV_ODOMETRY_RGBD,
             ffi::CUV_ODOMETRY_MONO,
         ] {
-            let error = check_rig(&[camera(), camera()], Some(&calibration), &config(mode))
-                .expect_err("only inertial mode reads an IMU");
+            let error = check_rig(&[camera(), camera()], Some(&calibration), &[], &config(mode))
+                .expect_err("only inertial and multisensor modes read an IMU");
             assert!(error.contains("IMU calibration"), "{error}");
         }
     }
@@ -261,6 +318,7 @@ mod tests {
         let error = check_rig(
             &[camera(), camera()],
             None,
+            &[],
             &config(ffi::CUV_ODOMETRY_INERTIAL),
         )
         .expect_err("inertial mode has nothing to integrate without a calibration");
@@ -271,8 +329,8 @@ mod tests {
     fn rgbd_refuses_a_depth_camera_outside_the_rig() {
         let mut rgbd = config(ffi::CUV_ODOMETRY_RGBD);
         rgbd.rgbd_depth_camera_id = -1;
-        let error =
-            check_rig(&[camera()], None, &rgbd).expect_err("-1 silently drops every depth image");
+        let error = check_rig(&[camera()], None, &[], &rgbd)
+            .expect_err("-1 silently drops every depth image");
         assert!(error.contains("rgbd_depth_camera_id"), "{error}");
     }
 
@@ -281,7 +339,7 @@ mod tests {
         for factor in [0.0, -1000.0, f32::NAN] {
             let mut rgbd = config(ffi::CUV_ODOMETRY_RGBD);
             rgbd.rgbd_depth_scale_factor = factor;
-            let error = check_rig(&[camera()], None, &rgbd)
+            let error = check_rig(&[camera()], None, &[], &rgbd)
                 .expect_err("a non-positive or non-finite scale cannot convert depth");
             assert!(error.contains("rgbd_depth_scale_factor"), "{error}");
         }
@@ -289,8 +347,57 @@ mod tests {
 
     #[test]
     fn a_stereo_mode_needs_a_second_camera() {
-        let error = check_rig(&[camera()], None, &config(ffi::CUV_ODOMETRY_MULTICAMERA))
+        let error = check_rig(&[camera()], None, &[], &config(ffi::CUV_ODOMETRY_MULTICAMERA))
             .expect_err("multicamera cannot triangulate from one camera");
+        assert!(error.contains("at least 2 cameras"), "{error}");
+    }
+
+    #[test]
+    fn depth_camera_ids_are_refused_outside_multisensor_mode() {
+        let error = check_rig(&[camera()], None, &[0], &config(ffi::CUV_ODOMETRY_RGBD))
+            .expect_err("only multisensor mode reads depth_camera_ids");
+        assert!(error.contains("depth_camera_ids"), "{error}");
+    }
+
+    #[test]
+    fn multisensor_refuses_a_depth_camera_outside_the_rig() {
+        let error = check_rig(
+            &[camera()],
+            None,
+            &[1],
+            &config(ffi::CUV_ODOMETRY_MULTISENSOR),
+        )
+        .expect_err("camera 1 does not exist on a one-camera rig");
+        assert!(error.contains("outside the 1 cameras"), "{error}");
+    }
+
+    #[test]
+    fn multisensor_refuses_a_repeated_depth_camera() {
+        let error = check_rig(
+            &[camera(), camera()],
+            None,
+            &[0, 0],
+            &config(ffi::CUV_ODOMETRY_MULTISENSOR),
+        )
+        .expect_err("a camera named twice leaves one depth image unmatched");
+        assert!(error.contains("twice"), "{error}");
+    }
+
+    #[test]
+    fn multisensor_refuses_a_scale_factor_that_cannot_convert_depth() {
+        for factor in [0.0, -1000.0, f32::NAN] {
+            let mut multisensor = config(ffi::CUV_ODOMETRY_MULTISENSOR);
+            multisensor.multisensor_depth_scale_factor = factor;
+            let error = check_rig(&[camera()], None, &[0], &multisensor)
+                .expect_err("a non-positive or non-finite scale cannot convert depth");
+            assert!(error.contains("multisensor_depth_scale_factor"), "{error}");
+        }
+    }
+
+    #[test]
+    fn multisensor_without_depth_needs_a_second_camera() {
+        let error = check_rig(&[camera()], None, &[], &config(ffi::CUV_ODOMETRY_MULTISENSOR))
+            .expect_err("no depth and no overlapping pair leaves no scale to track against");
         assert!(error.contains("at least 2 cameras"), "{error}");
     }
 
@@ -300,15 +407,31 @@ mod tests {
         assert!(check_rig(
             &[camera(), camera()],
             None,
+            &[],
             &config(ffi::CUV_ODOMETRY_MULTICAMERA)
         )
         .is_ok());
-        assert!(check_rig(&[camera()], None, &config(ffi::CUV_ODOMETRY_MONO)).is_ok());
-        assert!(check_rig(&[camera()], None, &config(ffi::CUV_ODOMETRY_RGBD)).is_ok());
+        assert!(check_rig(&[camera()], None, &[], &config(ffi::CUV_ODOMETRY_MONO)).is_ok());
+        assert!(check_rig(&[camera()], None, &[], &config(ffi::CUV_ODOMETRY_RGBD)).is_ok());
         assert!(check_rig(
             &[camera(), camera()],
             Some(&calibration),
+            &[],
             &config(ffi::CUV_ODOMETRY_INERTIAL)
+        )
+        .is_ok());
+        assert!(check_rig(
+            &[camera()],
+            None,
+            &[0],
+            &config(ffi::CUV_ODOMETRY_MULTISENSOR)
+        )
+        .is_ok());
+        assert!(check_rig(
+            &[camera(), camera()],
+            Some(&calibration),
+            &[1],
+            &config(ffi::CUV_ODOMETRY_MULTISENSOR)
         )
         .is_ok());
     }
