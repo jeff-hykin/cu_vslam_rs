@@ -44,6 +44,11 @@
             system = "aarch64-linux";
             cuda = "cudaPackages_13_0";
           };
+          # Non-Jetson ARM. NVIDIA ships no generic-arm tarball, so this variant only
+          # exists as a fork build; everything but `system` comes from forkBuilds.
+          aarch64 = {
+            system = "aarch64-linux";
+          };
         };
 
         # Variants built from the fork instead of NVIDIA's prebuilt tarball. Thor
@@ -54,6 +59,7 @@
             cuda = "cudaPackages_12_8";
             archs = "89;120";
             cudssPlatform = "linux-x86_64";
+            cudssCuda = "cuda12";
             cudssSha256 = "01s7xssfjadz1zfjprwp66j82h04snfpmjxg149m6a2bqq2nlw99";
           };
           orin = {
@@ -61,7 +67,17 @@
             archs = "87";
             # cuDSS >= 0.8 ships aarch64 as "linux-sbsa".
             cudssPlatform = "linux-sbsa";
+            cudssCuda = "cuda12";
             cudssSha256 = "12xixcrfl9yv2gf7rc0nkn2fhh171m2mnhvpfvgrfs4qbh0jd54l";
+          };
+          # Non-Jetson ARM: usually no NVIDIA GPU at all, so this is the CPU fallback.
+          # Hopper and Blackwell sbsa archs compiled in case one is present.
+          aarch64 = {
+            cuda = "cudaPackages_13_3";
+            archs = "90;120";
+            cudssPlatform = "linux-sbsa";
+            cudssCuda = "cuda13";
+            cudssSha256 = "02clxpqz0b60rfyrkz763yk0n15kk8bbn6wpqp1i0bkrjrbpxzn5";
           };
         };
 
@@ -135,7 +151,7 @@
             "0q4z9zvzas2pg566g889j4chy6w3m41bb82zrxs6ihl1arnral6q";
           # Downloaded by cuNLS's own cmake (AddCUDSS.cmake), also via FetchContent.
           cudss = depTarball "cudss"
-            "https://developer.download.nvidia.com/compute/cudss/redist/libcudss/${fork.cudssPlatform}/libcudss-${fork.cudssPlatform}-0.8.0.10_cuda12-archive.tar.xz"
+            "https://developer.download.nvidia.com/compute/cudss/redist/libcudss/${fork.cudssPlatform}/libcudss-${fork.cudssPlatform}-0.8.0.10_${fork.cudssCuda}-archive.tar.xz"
             fork.cudssSha256;
         };
 
@@ -246,6 +262,13 @@
             name = "sdk-${name}";
             value = sdkPackageFor name sdk;
           }) forThisSystem
+          // pkgs.lib.optionalAttrs (forThisSystem ? x86_64-cuda12) {
+               # The CPU-fallback name for x86 with no NVIDIA driver, mirroring
+               # `aarch64`. Same derivation as x86_64-cuda12: that build is
+               # ENFORCE_GPU=OFF so it runs CPU-only, and a cuda12 binary works
+               # under whichever driver gets installed later.
+               sdk-x86_64 = sdkPackageFor "x86_64-cuda12" forThisSystem.x86_64-cuda12;
+             }
           // { default = defaultSdk; };
 
         # A compile check: the shim and bindings link against the default SDK.
