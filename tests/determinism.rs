@@ -70,6 +70,8 @@ fn stereo_config(use_gpu: bool) -> ffi::CuvConfig {
         rectified_stereo_camera: true,
         rgbd_depth_scale_factor: 1.0,
         rgbd_depth_camera_id: 0,
+        multisensor_depth_scale_factor: 1.0,
+        multisensor_depth_stereo_tracking: false,
     }
 }
 
@@ -80,6 +82,8 @@ fn depth_config(use_gpu: bool) -> ffi::CuvConfig {
         rectified_stereo_camera: false,
         rgbd_depth_scale_factor: 1.0,
         rgbd_depth_camera_id: 0,
+        multisensor_depth_scale_factor: 1.0,
+        multisensor_depth_stereo_tracking: false,
     }
 }
 
@@ -95,12 +99,12 @@ fn backend_name(use_gpu: bool) -> &'static str {
 // which backends exist is a property of the SDK on disk. The tests used to fall back from GPU
 // to CPU without saying so, which let a GPU run stand in for a CPU determinism result.
 fn backend_is_available(use_gpu: bool) -> bool {
-    Tracker::new(&stereo_cameras(), None, &stereo_config(use_gpu)).is_ok()
+    Tracker::new(&stereo_cameras(), None, &[], &stereo_config(use_gpu)).is_ok()
 }
 
 fn track_stereo_sequence<'a>(frames: &'a [StereoFrame], use_gpu: bool) -> Vec<PoseEstimate> {
     let backend = backend_name(use_gpu);
-    let mut tracker = Tracker::new(&stereo_cameras(), None, &stereo_config(use_gpu))
+    let mut tracker = Tracker::new(&stereo_cameras(), None, &[], &stereo_config(use_gpu))
         .unwrap_or_else(|error| panic!("{backend} tracker creation failed: {error}"));
     frames
         .iter()
@@ -123,7 +127,7 @@ fn track_stereo_sequence<'a>(frames: &'a [StereoFrame], use_gpu: bool) -> Vec<Po
 
 fn track_sequence(frames: &[RgbdFrame], use_gpu: bool) -> Vec<PoseEstimate> {
     let backend = backend_name(use_gpu);
-    let mut tracker = Tracker::new(&depth_camera(), None, &depth_config(use_gpu))
+    let mut tracker = Tracker::new(&depth_camera(), None, &[], &depth_config(use_gpu))
         .unwrap_or_else(|error| panic!("{backend} tracker creation failed: {error}"));
     frames
         .iter()
