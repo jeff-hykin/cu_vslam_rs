@@ -102,6 +102,10 @@
             }} --strip-components=1 -C $out
             sed -i -e '/set(CMAKE_CUDA_COMPILER/d' -e '/set(CMAKE_CUDA_ARCHITECTURES/d' \
               $out/CMakeLists.txt
+            # thrust::make_tuple reached sparse_matrix.cu through zip_iterator.h until
+            # CCCL 3 (CUDA 13) stopped including tuple.h from there.
+            sed -i '/#include <thrust\/transform.h>/a #include <thrust/tuple.h>' \
+              $out/cunls/minimizer/sparse_matrix.cu
           '';
           lmdb = depTarball "lmdb"
             "https://github.com/LMDB/lmdb/archive/refs/tags/LMDB_0.9.31.tar.gz"
