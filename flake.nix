@@ -97,11 +97,14 @@
             cudssCuda = "cuda13";
             cudssSha256 = "02clxpqz0b60rfyrkz763yk0n15kk8bbn6wpqp1i0bkrjrbpxzn5";
           };
-          # Non-Jetson ARM: usually no NVIDIA GPU at all, so this is the CPU fallback.
-          # Hopper and Blackwell sbsa archs compiled in case one is present.
+          # Every ARM target in one library, which is what the PyPI wheel ships: the
+          # tag space has a single aarch64 slot, so it carries Hopper, Thor and
+          # Blackwell cubins and falls back to CPU on the ARM boxes with no NVIDIA
+          # GPU at all. Orin stays out of reach here however wide the arch list gets,
+          # since JetPack 6 predates the CUDA 13 driver.
           aarch64 = {
             cuda = "cudaPackages_13_3";
-            archs = "90;120";
+            archs = "90;110;120";
             cudssPlatform = "linux-sbsa";
             cudssCuda = "cuda13";
             cudssSha256 = "02clxpqz0b60rfyrkz763yk0n15kk8bbn6wpqp1i0bkrjrbpxzn5";
