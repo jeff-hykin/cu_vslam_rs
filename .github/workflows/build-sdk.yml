@@ -84,6 +84,14 @@ jobs:
           tar czf "dist/$name.tar.gz" -C stage "$name"
           ls -lh dist
 
+      # Ahead of the checks below, so that a tarball costing hours of compute
+      # survives a verdict of "this build is wrong".
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-${{ matrix.variant }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
       - name: Verify the GPU enforcement is off
         run: |
           lib=$(find -L "$out/lib" -name 'libcuvslam.so' | head -1)
@@ -98,12 +106,6 @@ jobs:
         run: |
           free -h
           df -h /
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdk-${{ matrix.variant }}
-          path: dist/*.tar.gz
-          if-no-files-found: error
 
       - name: Attach to release
         if: inputs.release_tag != ''
