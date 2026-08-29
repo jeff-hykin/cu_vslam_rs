@@ -51,8 +51,9 @@
           };
         };
 
-        # Variants built from the fork instead of NVIDIA's prebuilt tarball. Thor
-        # stays on a tarball until the fork build is proven on that hardware.
+        # Variants built from the fork instead of NVIDIA's prebuilt tarball.
+        # cudssCuda picks which cuDSS 0.8.0.10 archive cuNLS links against;
+        # it must match the nvcc major.
         # cuda12_8 on x86: sm_120 (Blackwell) needs nvcc >= 12.8.
         forkBuilds = {
           x86_64-cuda12 = {
@@ -62,6 +63,13 @@
             cudssCuda = "cuda12";
             cudssSha256 = "01s7xssfjadz1zfjprwp66j82h04snfpmjxg149m6a2bqq2nlw99";
           };
+          x86_64-cuda13 = {
+            cuda = "cudaPackages_13_3";
+            archs = "89;120";
+            cudssPlatform = "linux-x86_64";
+            cudssCuda = "cuda13";
+            cudssSha256 = "0ds9g8jv95pjnmvx9axm5d24in3161dsrjjqs42ykfywh3yza65s";
+          };
           orin = {
             cuda = "cudaPackages_12_6";
             archs = "87";
@@ -69,6 +77,14 @@
             cudssPlatform = "linux-sbsa";
             cudssCuda = "cuda12";
             cudssSha256 = "12xixcrfl9yv2gf7rc0nkn2fhh171m2mnhvpfvgrfs4qbh0jd54l";
+          };
+          # Jetson Thor, sm_110. cuda13_0 matches JetPack 7's driver.
+          thor = {
+            cuda = "cudaPackages_13_0";
+            archs = "110";
+            cudssPlatform = "linux-sbsa";
+            cudssCuda = "cuda13";
+            cudssSha256 = "02clxpqz0b60rfyrkz763yk0n15kk8bbn6wpqp1i0bkrjrbpxzn5";
           };
           # Non-Jetson ARM: usually no NVIDIA GPU at all, so this is the CPU fallback.
           # Hopper and Blackwell sbsa archs compiled in case one is present.
