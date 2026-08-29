@@ -1,0 +1,110 @@
+name: build-sdk
+
+# Builds every fork variant of the cuVSLAM SDK on a native runner and publishes
+# the result as a tarball, so downstream wheel builds can consume a prebuilt SDK
+# instead of recompiling cuVSLAM themselves.
+#
+# Native runners only: there is no qemu step here. aarch64 variants go to
+# ubuntu-24.04-arm, x86_64 variants to ubuntu-24.04.
+#
+# Dispatch-only. A full matrix is several compute-hours, which is not something
+# to spend on every push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to attach the tarballs to. Empty = artifacts only."
+        default: ""
+
+jobs:
+  build:
+    name: ${{ matrix.variant }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: x86_64-cuda12
+            runner: ubuntu-24.04
+            system: x86_64-linux
+          - variant: x86_64-cuda13
+            runner: ubuntu-24.04
+            system: x86_64-linux
+          - variant: orin
+            runner: ubuntu-24.04-arm
+            system: aarch64-linux
+          - variant: thor
+            runner: ubuntu-24.04-arm
+            system: aarch64-linux
+          - variant: aarch64
+            runner: ubuntu-24.04-arm
+            system: aarch64-linux
+    steps:
+      - uses: actions/checkout@v4
+
+      # A nixpkgs CUDA closure is tens of gigabytes and the runners ship ~14 GB
+      # free, so the preinstalled toolchains have to go first.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+
+      # Runners are 4-core/16GB. nvcc peaks well past that when several
+      # translation units land together, and swap is cheaper than a rerun.
+      - name: Add swap
+        run: |
+          sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
+          sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+          free -h
+          df -h /
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Build the SDK
+        run: |
+          out=$(nix build -L --no-link --print-out-paths \
+            --cores 4 --max-jobs 1 \
+            ".#packages.${{ matrix.system }}.sdk-${{ matrix.variant }}")
+          echo "out=$out" >> "$GITHUB_ENV"
+          ls -lR "$out" | head -40
+
+      # The stock NVIDIA tarballs unpack to lib/ include/ share/, and so does
+      # this, so CUVSLAM_SDK_DIR can point straight at the extracted directory.
+      - name: Package
+        run: |
+          name="cuvslam-cpp-17.0.0-${{ matrix.variant }}-fork"
+          mkdir -p "stage/$name" dist
+          cp -RL "$out"/* "stage/$name/"
+          chmod -R u+w "stage/$name"
+          tar czf "dist/$name.tar.gz" -C stage "$name"
+          ls -lh dist
+
+      - name: Verify the GPU enforcement is off
+        run: |
+          lib=$(find -L "$out/lib" -name 'libcuvslam.so' | head -1)
+          if strings "$lib" | grep -q 'use_gpu must be enabled'; then
+            echo "ERROR: $lib was built with ENFORCE_GPU=ON; use_gpu=false will be rejected" >&2
+            exit 1
+          fi
+          objdump -p "$lib" | grep NEEDED
+
+      - name: Diagnostics
+        if: always()
+        run: |
+          free -h
+          df -h /
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-${{ matrix.variant }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" dist/*.tar.gz --clobber
