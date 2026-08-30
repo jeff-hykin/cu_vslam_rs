@@ -1,6 +1,6 @@
 # cu_vslam_rs
 
-Rust FFI for [NVIDIA cuVSLAM](https://github.com/nvidia-isaac/cuVSLAM) visual odometry: raw bindings in `cu_vslam_rs::ffi` plus a safe `Tracker` wrapper. The repository also vendors a cuVSLAM v17.0.0 fork (`cuvslam/`) and a nix flake that packages a cuVSLAM SDK per platform — including **macOS on Apple silicon via [CuMetal](https://github.com/jeff-hykin/cuda-metal)**.
+Rust FFI for [NVIDIA cuVSLAM](https://github.com/nvidia-isaac/cuVSLAM) visual odometry: raw bindings in `cu_vslam_rs::ffi` plus a safe `Tracker` wrapper. The repository also vendors a cuVSLAM v17.0.0 fork (`cuvslam/`) and a nix flake that packages a cuVSLAM SDK per platform**.
 
 ## Layout
 
