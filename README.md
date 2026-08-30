@@ -59,13 +59,15 @@ cargo build
 
 Flakes that consume this one can take it as an input and use `cu-vslam-rs.packages.${system}."sdk-<variant>"` as `CUVSLAM_SDK_DIR` for their own Rust builds.
 
-`x86_64-cuda12` and `orin` are compiled from `cuvslam/` in a sandboxed nix build (`ENFORCE_GPU=OFF`, so CPU/GPU is a runtime switch). `thor` uses NVIDIA's prebuilt tarball.
+`x86_64-cuda12` and `orin` are compiled from `cuvslam/` in a sandboxed nix build. `thor` uses NVIDIA's prebuilt tarball.
+
+Every variant we compile ourselves — `x86_64-cuda12`, `orin` — is `ENFORCE_GPU=OFF`, so `use_gpu` selects the backend at runtime rather than at build time. One caveat applies on every platform: **RGBD needs the GPU.** cuVSLAM v17 lifts depth into landmarks only in a CUDA kernel (`lift_kernel`), with no CPU counterpart, so an RGBD tracker with `use_gpu: false` reports success while returning the identity pose. Stereo (`CUV_ODOMETRY_MULTICAMERA`) runs on either backend.
 
 ## Determinism
 
 Upstream cuVSLAM seeds its visual-odometry RANSAC from `std::random_device`, so identical input produces slightly different trajectories run-to-run (~0.2 m rmse spread observed). This fork seeds it with a fixed constant (`cuvslam/libs/math/ransac.h`), matching the `seed(0)` that upstream's own SLAM `reproduce_mode` uses.
 
-`cargo test --test determinism` drives a synthetic scene twice and asserts the two trajectories match bit for bit and cover the commanded distance. Both assertions pass against `sdk-x86_64-cuda12`.
+`cargo test --test determinism` drives a synthetic scene twice and asserts the two trajectories match bit for bit and cover the commanded distance, once per backend the SDK carries. Both assertions pass against `sdk-x86_64-cuda12`. The RGBD cases only run on the GPU, for the reason above.
 
 ## License
 
