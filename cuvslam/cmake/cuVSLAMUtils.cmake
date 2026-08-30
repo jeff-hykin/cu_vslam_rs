@@ -93,7 +93,13 @@ macro(setup_cuvslam_settings)
         )
 
         # Architecture-specific flags
-        if (${CMAKE_HOST_SYSTEM_PROCESSOR} MATCHES "arm64|aarch64")
+        if (NOT APPLE AND ${CMAKE_HOST_SYSTEM_PROCESSOR} MATCHES "arm64|aarch64")
+            # Redistributed as a prebuilt archive, so target the oldest supported Jetson
+            # rather than the build machine: -march=native on an armv9 build host (GitHub's
+            # Cobalt 100 runners) emits instructions an Orin's Cortex-A78AE (armv8.2)
+            # traps on. Xavier's Carmel is armv8.2 as well.
+            target_compile_options(cuvslam_settings INTERFACE -march=armv8.2-a)
+        elseif (${CMAKE_HOST_SYSTEM_PROCESSOR} MATCHES "arm64|aarch64")
             # Compile for compatible ARM hardware (Nano, TX2, Xavier, etc.)
             target_compile_options(cuvslam_settings INTERFACE -march=native)
         elseif (${CMAKE_HOST_SYSTEM_PROCESSOR} MATCHES "x86_64|amd64")
