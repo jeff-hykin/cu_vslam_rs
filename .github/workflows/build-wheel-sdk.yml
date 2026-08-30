@@ -1,0 +1,155 @@
+name: build-wheel-sdk
+
+# Builds the two wheel-feeding fork variants WITHOUT nix, on ubuntu-22.04 runners,
+# so libcuvslam.so links glibc <= 2.35 / GLIBCXX <= 3.4.30 and the dim_odom wheels
+# can be tagged manylinux_2_35 (JetPack 6 Jetsons run Ubuntu 22.04 = glibc 2.35).
+#
+# Nix cannot produce this: the wheel's .so is dlopen'd into the host's Python
+# process, which already runs the host glibc, so the .so must need no symbol newer
+# than the host provides. Nix always links against nixpkgs' own glibc (2.41 on
+# unstable), and a nixpkgs old enough for glibc 2.35 predates the CUDA 13 packages.
+# Building on an old distro is how every manylinux wheel gets made; the flake
+# remains the build for everything that is not a wheel.
+#
+# Dependency pins come from the fork's own cmake/ext/*.cmake FetchContent hashes;
+# the runner has network, so only cuNLS is pre-fetched here — it needs two patches
+# (see the flake's forkDepsFor, which this mirrors).
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to attach the tarballs to. Empty = artifacts only."
+        default: ""
+
+jobs:
+  build:
+    name: ${{ matrix.variant }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: x86_64-cuda13
+            runner: ubuntu-22.04
+            cuda_repo_arch: x86_64
+            archs: "89;120"
+          - variant: aarch64
+            runner: ubuntu-22.04-arm
+            cuda_repo_arch: sbsa
+            archs: "90;110;120"
+    steps:
+      - uses: actions/checkout@v4
+
+      # The CUDA toolkit is ~9 GB installed and the runners ship ~14 GB free.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          docker-images: true
+
+      # Runners are 4-core/16GB. nvcc peaks well past that when several
+      # translation units land together, and swap is cheaper than a rerun.
+      - name: Add swap
+        run: |
+          sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
+          sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+          free -h
+          df -h /
+
+      # The flake builds these variants with cudaPackages_13_3; take the newest
+      # 13.x the ubuntu2204 repo carries. The host compiler stays 22.04's default
+      # gcc, which is what caps the glibc/GLIBCXX symbol ceiling.
+      - name: Install the CUDA toolkit
+        run: |
+          curl -fsSLO "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/${{ matrix.cuda_repo_arch }}/cuda-keyring_1.1-1_all.deb"
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update -qq
+          toolkit=$(apt-cache search --names-only '^cuda-toolkit-13-[0-9]+$' | cut -d' ' -f1 | sort -V | tail -1)
+          test -n "$toolkit"
+          sudo apt-get install -y -qq "$toolkit"
+          /usr/local/cuda/bin/nvcc --version
+          gcc --version | head -1
+
+      # cuNLS pins /usr/local/cuda and its own arch list with plain set()s ahead
+      # of project(), stomping the parent configuration, and its sparse_matrix.cu
+      # lost <thrust/tuple.h> when CCCL 3 (CUDA 13) stopped including it through
+      # zip_iterator.h. Same two patches as the flake's forkDepsFor.
+      - name: Pre-fetch and patch cuNLS
+        run: |
+          curl -fsSL -o cunls.tar.gz \
+            "https://github.com/nvidia-isaac/cuNLS/archive/refs/tags/Release_07_13_2026.tar.gz"
+          echo "23b2917ae3903e6a688edb1652e40202d314527cd7fa9db68c762f0429375f77  cunls.tar.gz" | sha256sum -c
+          mkdir cunls-src && tar xzf cunls.tar.gz --strip-components=1 -C cunls-src
+          sed -i -e '/set(CMAKE_CUDA_COMPILER/d' -e '/set(CMAKE_CUDA_ARCHITECTURES/d' \
+            cunls-src/CMakeLists.txt
+          sed -i '/#include <thrust\/transform.h>/a #include <thrust/tuple.h>' \
+            cunls-src/cunls/minimizer/sparse_matrix.cu
+
+      - name: Build the SDK
+        run: |
+          cmake -S cuvslam -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DENFORCE_GPU=OFF \
+            -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.archs }}" \
+            -DFETCHCONTENT_SOURCE_DIR_CUNLS="$PWD/cunls-src"
+          cmake --build build --target cuvslam --parallel 4
+
+      # Same output shape as the flake's forkSdkFor, so CUVSLAM_SDK_DIR can point
+      # straight at the extracted directory.
+      - name: Package
+        run: |
+          name="cuvslam-cpp-17.0.0-${{ matrix.variant }}-fork"
+          mkdir -p "stage/$name/lib" "stage/$name/include/cuvslam" "stage/$name/share/cuvslam" dist
+          cp "$(find build -name libcuvslam.so | head -1)" "stage/$name/lib/"
+          cp cuvslam/libs/cuvslam/cuvslam2.h "stage/$name/include/cuvslam/"
+          cp cuvslam/LICENSE "stage/$name/share/cuvslam/"
+          echo "Built from cuvslam/ in github.com/jeff-hykin/cu_vslam_rs with ENFORCE_GPU=OFF." \
+            > "stage/$name/share/cuvslam/NOTICE"
+          tar czf "dist/$name.tar.gz" -C stage "$name"
+          ls -lh dist
+
+      # Ahead of the checks below, so that a tarball costing hours of compute
+      # survives a verdict of "this build is wrong".
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-sdk-${{ matrix.variant }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+      # The entire point of this workflow: nothing newer than Ubuntu 22.04 provides.
+      - name: Verify the glibc symbol ceiling
+        run: |
+          lib=$(find build -name libcuvslam.so | head -1)
+          objdump -p "$lib" | grep NEEDED
+          glibc=$(objdump -T "$lib" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          glibcxx=$(objdump -T "$lib" | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1)
+          echo "ceilings: $glibc $glibcxx"
+          test "$(printf '%s\n' "$glibc" GLIBC_2.35 | sort -V | tail -1)" = GLIBC_2.35
+          test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.30 | sort -V | tail -1)" = GLIBCXX_3.4.30
+          if objdump -T "$lib" | grep -q GLIBC_ABI_GNU2_TLS; then
+            echo "ERROR: GLIBC_ABI_GNU2_TLS marker present (needs glibc 2.41+)" >&2
+            exit 1
+          fi
+
+      - name: Verify the GPU enforcement is off
+        run: |
+          lib=$(find build -name libcuvslam.so | head -1)
+          if strings "$lib" | grep -q 'use_gpu must be enabled'; then
+            echo "ERROR: $lib was built with ENFORCE_GPU=ON; use_gpu=false will be rejected" >&2
+            exit 1
+          fi
+
+      - name: Diagnostics
+        if: always()
+        run: |
+          free -h
+          df -h /
+
+      - name: Attach to release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" dist/*.tar.gz --clobber
