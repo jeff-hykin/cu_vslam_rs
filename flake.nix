@@ -14,6 +14,12 @@
           inherit system;
           config = { allowUnfree = true; cudaSupport = !isDarwin; };
         };
+        # Orin's iGPU needs nixpkgs' Jetson CUDA libraries; the default SBSA ones fail at cusolverDnCreate.
+        pkgsOrin = import nixpkgs {
+          inherit system;
+          config = { allowUnfree = true; cudaSupport = true; cudaCapabilities = [ "8.7" ]; };
+        };
+        cudaPkgsFor = name: (if name == "orin" then pkgsOrin else pkgs);
 
         # Every C++ build NVIDIA ships for this release. The ubuntu flavor does not
         # matter under autoPatchelf. `cuda` is the matching nixpkgs set: a runtime
@@ -57,6 +63,10 @@
           # Non-Jetson ARM. NVIDIA ships no generic-arm tarball, so this variant only
           # exists as a fork build; everything but `system` comes from forkBuilds.
           aarch64 = {
+            system = "aarch64-linux";
+          };
+          # ARM with no NVIDIA GPU (Raspberry Pi).
+          aarch64-cpu = {
             system = "aarch64-linux";
           };
         };
@@ -109,6 +119,8 @@
             cudssCuda = "cuda13";
             cudssSha256 = "02clxpqz0b60rfyrkz763yk0n15kk8bbn6wpqp1i0bkrjrbpxzn5";
           };
+          # No `cuda`: built USE_CUDA=OFF.
+          aarch64-cpu = { };
         };
 
         # The fork's FetchContent dependencies, pre-fetched (the sandbox is offline) and
@@ -185,9 +197,10 @@
             fork.cudssSha256;
         };
 
-        cudaLibs = sdk: pkgs.lib.optionals (sdk ? cuda) (
-          with pkgs.${sdk.cuda}; [ cuda_cudart libcublas libcusolver libcusparse ]
-            ++ pkgs.lib.optionals (pkgs.${sdk.cuda} ? libnvjitlink) [ libnvjitlink ]
+        cudaLibs = name: sdk: pkgs.lib.optionals (sdk ? cuda) (
+          let cudaSet = (cudaPkgsFor name).${sdk.cuda}; in
+          with cudaSet; [ cuda_cudart libcublas libcusolver libcusparse ]
+            ++ pkgs.lib.optionals (cudaSet ? libnvjitlink) [ libnvjitlink ]
         );
 
         sdkFor = name: sdk: pkgs.stdenv.mkDerivation {
@@ -198,7 +211,7 @@
           # ELF-only, and none of the CUDA runtime has a darwin build.
           nativeBuildInputs = pkgs.lib.optionals (!isDarwin) [ pkgs.autoPatchelfHook ];
           buildInputs = pkgs.lib.optionals (!isDarwin) [ pkgs.stdenv.cc.cc.lib ]
-            ++ cudaLibs sdk;
+            ++ cudaLibs name sdk;
           installPhase = ''
             runHook preInstall
             mkdir -p $out/lib $out/include $out/bin $out/share/cuvslam
@@ -229,25 +242,31 @@
         # Same output shape as sdkFor, compiled from cuvslam/. ENFORCE_GPU=OFF so one
         # library carries both backends and use_gpu becomes a runtime switch.
         forkSdkFor = name: fork: let
-          cudaSet = pkgs.${fork.cuda};
-          deps = forkDepsFor fork;
-        in cudaSet.backendStdenv.mkDerivation {
+          hasCuda = fork ? cuda;
+          cudaSet = (cudaPkgsFor name).${fork.cuda};
+          # cuNLS and its cuDSS are CUDA-only.
+          deps = if hasCuda then forkDepsFor fork else builtins.removeAttrs (forkDepsFor fork) [ "cunls" "cudss" ];
+          stdenv = if hasCuda then cudaSet.backendStdenv else pkgs.stdenv;
+        in stdenv.mkDerivation {
           pname = "cuvslam-fork-${name}";
           version = "17.0.0-odom-state";
           src = ./cuvslam;
-          nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config cudaSet.cuda_nvcc ];
-          buildInputs = [ cudaSet.cuda_cudart cudaSet.libcublas cudaSet.libcusolver cudaSet.libcusparse ]
+          nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.removeReferencesTo ] ++ pkgs.lib.optionals hasCuda [ cudaSet.cuda_nvcc ];
+          buildInputs = pkgs.lib.optionals hasCuda (
+            [ cudaSet.cuda_cudart cudaSet.libcublas cudaSet.libcusolver cudaSet.libcusparse ]
             ++ pkgs.lib.optionals (cudaSet ? libnvjitlink) [ cudaSet.libnvjitlink ]
-            ++ pkgs.lib.optionals (cudaSet ? cuda_cccl) [ cudaSet.cuda_cccl ];
+            ++ pkgs.lib.optionals (cudaSet ? cuda_cccl) [ cudaSet.cuda_cccl ]
+          );
           cmakeFlags = [
             "-DCMAKE_BUILD_TYPE=Release"
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
             "-DENFORCE_GPU=OFF"
+          ] ++ (if hasCuda then [
             "-DCMAKE_CUDA_ARCHITECTURES=${fork.archs}"
             # The fork caches /usr/local/cuda paths; point both at the nix toolkit.
             "-DCUDAToolkit_ROOT=${cudaSet.cudatoolkit}"
             "-DCMAKE_CUDA_COMPILER=${cudaSet.cudatoolkit}/bin/nvcc"
-          ];
+          ] else [ "-DUSE_CUDA=OFF" "-DUSE_CUNLS=OFF" ]);
           # Some dep builds write into their own source tree (zlib renames zconf.h), so
           # hand FetchContent writable copies rather than read-only store paths.
           preConfigure = pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList
@@ -268,22 +287,90 @@
               > $out/share/cuvslam/NOTICE
             runHook postInstall
           '';
+          # nvcc embeds its link line, so the whole toolkit would otherwise ride along at runtime.
+          postFixup = pkgs.lib.optionalString hasCuda ''
+            remove-references-to -t ${cudaSet.cudatoolkit} $out/lib/libcuvslam.so
+          '';
+          disallowedReferences = pkgs.lib.optionals hasCuda [ cudaSet.cudatoolkit ];
           meta.license = pkgs.lib.licenses.unfree;  # NVIDIA Community License
         };
 
         forThisSystem = pkgs.lib.filterAttrs (_: sdk: sdk.system == system) sdks;
-        # CUDA 12 on both linux arches: it is what the drivers in the field are, and
-        # a 13 driver runs a 12 build.
-        defaultVariant = {
-          aarch64-darwin = "metal";
-          aarch64-linux = "orin";
-        }.${system} or "x86_64-cuda12";
 
         # Fork-built variants override the tarball.
         sdkPackageFor = name: sdk:
           if forkBuilds ? ${name} then forkSdkFor name forkBuilds.${name} else sdkFor name sdk;
 
-        defaultSdk = sdkPackageFor defaultVariant forThisSystem.${defaultVariant};
+        # Nix can't see the SoC or driver, so the variant is picked at runtime.
+        cuvslamVariant = pkgs.writeShellApplication {
+          name = "cuvslam-variant";
+          runtimeInputs = [ pkgs.coreutils pkgs.gnused ];
+          text = ''
+            if [ -n "''${CUVSLAM_VARIANT:-}" ]; then
+              echo "$CUVSLAM_VARIANT"
+              exit 0
+            fi
+            case "$(uname -s)-$(uname -m)" in
+              Darwin-arm64) echo metal ;;
+              Linux-aarch64)
+                case "$(tr -d '\0' < /proc/device-tree/compatible 2>/dev/null || true)" in
+                  *tegra264*) echo thor ;;
+                  *tegra234*) echo orin ;;
+                  *tegra194* | *tegra210*)
+                    echo "cuvslam-variant: no cuVSLAM GPU build for JetPack 4/5; only use_gpu=false will work" >&2
+                    echo aarch64-cpu ;;
+                  *)
+                    if [ -e /proc/driver/nvidia/version ]; then
+                      echo aarch64
+                    else
+                      echo aarch64-cpu
+                    fi ;;
+                esac ;;
+              Linux-x86_64)
+                cuda_major=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: *\([0-9]*\).*/\1/p' | head -n 1 || true)
+                case "$cuda_major" in
+                  "")
+                    echo "cuvslam-variant: no NVIDIA driver found; only use_gpu=false will work" >&2
+                    echo x86_64 ;;
+                  12) echo x86_64-cuda12 ;;
+                  [0-9] | 1[01])
+                    echo "cuvslam-variant: this driver supports CUDA $cuda_major and the GPU path needs 12+; only use_gpu=false will work" >&2
+                    echo x86_64 ;;
+                  *) echo x86_64-cuda13 ;;
+                esac ;;
+              *)
+                echo "cuvslam-variant: no cuVSLAM build for $(uname -s)-$(uname -m)" >&2
+                exit 1 ;;
+            esac
+          '';
+        };
+
+        allVariants = pkgs.lib.mapAttrs sdkPackageFor forThisSystem
+          // pkgs.lib.optionalAttrs (forThisSystem ? x86_64-cuda12) {
+               # The CPU-fallback name for x86 with no NVIDIA driver, mirroring
+               # `aarch64`. Same derivation as x86_64-cuda12: that build is
+               # ENFORCE_GPU=OFF so it runs CPU-only, and a cuda12 binary works
+               # under whichever driver gets installed later.
+               x86_64 = sdkPackageFor "x86_64-cuda12" forThisSystem.x86_64-cuda12;
+             };
+
+        # Excludes aarch64: a third CUDA stack on every Jetson.
+        bundledVariants = builtins.removeAttrs allVariants [ "aarch64" ];
+
+        sdkBundle = pkgs.runCommand "cuvslam-sdk-bundle" { } ''
+          mkdir -p $out/bin
+          ${pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (name: sdk: ''
+            ln -s ${sdk} $out/${name}
+          '') bundledVariants)}
+          ln -s ${cuvslamVariant}/bin/cuvslam-variant $out/bin/
+          cat > $out/bin/cuvslam-sdk-dir <<EOF
+          #!${pkgs.runtimeShell}
+          variant=\$(${cuvslamVariant}/bin/cuvslam-variant) || exit 1
+          [ -e "$out/\$variant" ] || { echo "cuvslam-sdk-dir: the default has no \$variant SDK; build .#sdk-\$variant" >&2; exit 1; }
+          echo "$out/\$variant"
+          EOF
+          chmod +x $out/bin/cuvslam-sdk-dir
+        '';
 
         # The crate, linked against a given SDK.
         crateFor = sdkPackage: pkgs.rustPlatform.buildRustPackage {
@@ -301,34 +388,36 @@
           doCheck = false;
         };
       in {
-        packages = pkgs.lib.mapAttrs' (name: sdk: {
-            name = "sdk-${name}";
-            value = sdkPackageFor name sdk;
-          }) forThisSystem
-          // pkgs.lib.optionalAttrs (forThisSystem ? x86_64-cuda12) {
-               # The CPU-fallback name for x86 with no NVIDIA driver, mirroring
-               # `aarch64`. Same derivation as x86_64-cuda12: that build is
-               # ENFORCE_GPU=OFF so it runs CPU-only, and a cuda12 binary works
-               # under whichever driver gets installed later.
-               sdk-x86_64 = sdkPackageFor "x86_64-cuda12" forThisSystem.x86_64-cuda12;
-             }
-          // { default = defaultSdk; };
+        packages = pkgs.lib.mapAttrs' (name: sdk: { name = "sdk-${name}"; value = sdk; }) allVariants
+          // { default = sdkBundle; cuvslam-variant = cuvslamVariant; };
 
-        # A compile check: the shim and bindings link against the default SDK.
-        checks.crate = crateFor defaultSdk;
+        inherit bundledVariants;
+
+        # A compile check against each SDK.
+        checks = pkgs.lib.mapAttrs' (name: sdk: { name = "crate-${name}"; value = crateFor sdk; })
+          (builtins.removeAttrs allVariants [ "x86_64" ]);
 
         devShells.default = pkgs.mkShell {
           packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt ];
-          CUVSLAM_SDK_DIR = defaultSdk;
-          # Jetson CUDA is host-provided and nix's glibc does not read the system ld.so.cache,
-          # so both halves have to be named here. Without the driver dir cudart finds no
-          # libcuda.so.1 at all and reports it as one too old for the runtime; without JetPack's
-          # own math libraries winning over nixpkgs', cusolverDnCreate fails on the iGPU.
+          shellHook = ''
+            if [ -z "''${CUVSLAM_SDK_DIR:-}" ]; then
+              case "$(${cuvslamVariant}/bin/cuvslam-variant)" in
+${pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (name: sdk: ''
+                ${name}) cuvslam_sdk_drv=${builtins.unsafeDiscardStringContext sdk.drvPath} ;;
+'') allVariants)}                *) cuvslam_sdk_drv= ;;
+              esac
+              if [ -n "$cuvslam_sdk_drv" ] \
+                && CUVSLAM_SDK_DIR=$(nix build --no-link --print-out-paths "$cuvslam_sdk_drv^out"); then
+                export CUVSLAM_SDK_DIR
+              fi
+              unset cuvslam_sdk_drv
+            fi
+          '';
+          # nix's glibc does not read ld.so.cache, so name the Jetson driver dirs.
           LD_LIBRARY_PATH = pkgs.lib.optionalString (system == "aarch64-linux") (
             pkgs.lib.concatStringsSep ":" [
               "/usr/lib/aarch64-linux-gnu/nvidia"
               "/usr/lib/aarch64-linux-gnu/tegra"
-              "/usr/local/cuda/targets/aarch64-linux/lib"
             ]
           );
         };

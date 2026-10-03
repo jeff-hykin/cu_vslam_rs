@@ -42,9 +42,12 @@ if let Some((world_from_rig, covariance)) = estimate.world_from_rig {
 ## Getting an SDK via the flake
 
 ```sh
-# The default variant for your machine (metal on Apple silicon, cuda12 on x86_64-linux):
+# Every variant for your system (orin + thor + the CUDA-free aarch64-cpu on aarch64-linux,
+# cuda12 + cuda13 on x86_64-linux, metal on Apple silicon); cuvslam-sdk-dir names the one this
+# host needs, read from /proc/device-tree on a Jetson and from the driver's CUDA version on x86.
+# An ARM server with an NVIDIA GPU builds #sdk-aarch64 instead.
 nix build github:jeff-hykin/cu_vslam_rs
-export CUVSLAM_SDK_DIR=$PWD/result
+export CUVSLAM_SDK_DIR=$(result/bin/cuvslam-sdk-dir)   # CUVSLAM_VARIANT=<name> overrides
 
 # Or a specific variant:
 nix build github:jeff-hykin/cu_vslam_rs#sdk-x86_64-cuda12   # built from cuvslam/, sm_89 + sm_120
@@ -58,7 +61,7 @@ nix develop github:jeff-hykin/cu_vslam_rs
 cargo build
 ```
 
-Flakes that consume this one can take it as an input and use `cu-vslam-rs.packages.${system}."sdk-<variant>"` as `CUVSLAM_SDK_DIR` for their own Rust builds.
+Flakes that consume this one can take it as an input and use `cu-vslam-rs.packages.${system}."sdk-<variant>"` as `CUVSLAM_SDK_DIR` for their own Rust builds. To ship one artifact per system the way the default does, build once per entry of `cu-vslam-rs.bundledVariants.${system}` and exec the one `cu-vslam-rs.packages.${system}.cuvslam-variant` prints.
 
 `x86_64-cuda12` and `orin` are compiled from `cuvslam/` in a sandboxed nix build. `thor` uses NVIDIA's prebuilt tarball. `metal` uses a CuMetal build of `cuvslam/` hosted as a release artifact, because prewarming its metallib cache needs Xcode's Metal compiler and so cannot run in the nix sandbox.
 

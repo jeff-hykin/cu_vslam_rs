@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <stdexcept>
 #include <thread>
 
 #include "cnpy.h"
@@ -29,7 +30,9 @@
 #include "common/isometry.h"
 #include "common/tga.h"
 #include "common/unaligned_types.h"
+#ifdef USE_CUDA
 #include "cuda_modules/cuda_kernels/cuda_kernels.h"
+#endif
 #include "sof/image_manager.h"
 
 #include "cuvslam/internal.h"
@@ -243,17 +246,23 @@ void DumpTrackCall(const std::string& input_dump_root_dir, size_t frame_id, cons
       assert(image.data_type == Image::DataType::UINT8);
       const uint8_t* pixels = static_cast<const uint8_t*>(image.pixels);
       size_t bpp = image.encoding == Image::Encoding::RGB ? 3 : 1;
+#ifdef USE_CUDA
       thread_local std::vector<uint8_t, cuda::HostAllocator<uint8_t>> cpu_image;
       thread_local std::vector<uint8_t, cuda::HostAllocator<uint8_t>> cpu_input_mask;
       cuda::Stream s;
       cuda::GPUImage8 gpu_mask_original;
       cuda::GPUImage8 gpu_mask_resized;
+#endif
       ImageMatrix<uint8_t> cpu_mask_resized;
       if (image.is_gpu_mem) {
+#ifdef USE_CUDA
         cpu_image.resize(image.height * image.width * bpp);
         cudaMemcpy2D((void*)cpu_image.data(), image.width * bpp, image.pixels, image.pitch, image.width * bpp,
                      image.height, cudaMemcpyDeviceToHost);
         pixels = cpu_image.data();
+#else
+        throw std::runtime_error("cuVSLAM: built without CUDA, so GPU-memory images are unsupported");
+#endif
       }
 
       thread_local std::vector<uint8_t> gray_image;
@@ -279,6 +288,9 @@ void DumpTrackCall(const std::string& input_dump_root_dir, size_t frame_id, cons
                mask.encoding == Image::Encoding::MONO);
         const uint8_t* input_mask = static_cast<const uint8_t*>(mask.pixels);
         if (mask.is_gpu_mem) {
+#ifndef USE_CUDA
+          throw std::runtime_error("cuVSLAM: built without CUDA, so GPU-memory images are unsupported");
+#else
           cpu_input_mask.resize(image.height * image.width);
           if (mask.height == image.height && mask.width == image.width) {
             cudaMemcpy2D((void*)cpu_input_mask.data(), mask.width, input_mask, mask.pitch, mask.width, mask.height,
@@ -293,6 +305,7 @@ void DumpTrackCall(const std::string& input_dump_root_dir, size_t frame_id, cons
           }
           cudaStreamSynchronize(s.get_stream());
           input_mask = cpu_input_mask.data();
+#endif
         } else {
           if (mask.height != image.height && mask.width != image.width) {
             auto cpu_mask_map =
@@ -337,11 +350,15 @@ void DumpTrackCall(const std::string& input_dump_root_dir, size_t frame_id, cons
       const uint16_t* depth_data = static_cast<const uint16_t*>(depth.pixels);
 
       if (depth.is_gpu_mem) {
+#ifdef USE_CUDA
         thread_local std::vector<uint16_t, cuda::HostAllocator<uint16_t>> cpu_depth;
         cpu_depth.resize(depth.height * depth.width);
         cudaMemcpy2D((void*)cpu_depth.data(), depth.width * sizeof(uint16_t), depth.pixels, depth.pitch,
                      depth.width * sizeof(uint16_t), depth.height, cudaMemcpyDeviceToHost);
         depth_data = cpu_depth.data();
+#else
+        throw std::runtime_error("cuVSLAM: built without CUDA, so GPU-memory images are unsupported");
+#endif
       }
 
       std::ostringstream depthFileName;
