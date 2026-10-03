@@ -14,6 +14,12 @@
           inherit system;
           config = { allowUnfree = true; cudaSupport = !isDarwin; };
         };
+        # Orin's iGPU needs nixpkgs' Jetson CUDA libraries; the default SBSA ones fail at cusolverDnCreate.
+        pkgsOrin = import nixpkgs {
+          inherit system;
+          config = { allowUnfree = true; cudaSupport = true; cudaCapabilities = [ "8.7" ]; };
+        };
+        cudaPkgsFor = name: (if name == "orin" then pkgsOrin else pkgs);
 
         # Every C++ build NVIDIA ships for this release. The ubuntu flavor does not
         # matter under autoPatchelf. `cuda` is the matching nixpkgs set: a runtime
@@ -191,9 +197,10 @@
             fork.cudssSha256;
         };
 
-        cudaLibs = sdk: pkgs.lib.optionals (sdk ? cuda) (
-          with pkgs.${sdk.cuda}; [ cuda_cudart libcublas libcusolver libcusparse ]
-            ++ pkgs.lib.optionals (pkgs.${sdk.cuda} ? libnvjitlink) [ libnvjitlink ]
+        cudaLibs = name: sdk: pkgs.lib.optionals (sdk ? cuda) (
+          let cudaSet = (cudaPkgsFor name).${sdk.cuda}; in
+          with cudaSet; [ cuda_cudart libcublas libcusolver libcusparse ]
+            ++ pkgs.lib.optionals (cudaSet ? libnvjitlink) [ libnvjitlink ]
         );
 
         sdkFor = name: sdk: pkgs.stdenv.mkDerivation {
@@ -204,7 +211,7 @@
           # ELF-only, and none of the CUDA runtime has a darwin build.
           nativeBuildInputs = pkgs.lib.optionals (!isDarwin) [ pkgs.autoPatchelfHook ];
           buildInputs = pkgs.lib.optionals (!isDarwin) [ pkgs.stdenv.cc.cc.lib ]
-            ++ cudaLibs sdk;
+            ++ cudaLibs name sdk;
           installPhase = ''
             runHook preInstall
             mkdir -p $out/lib $out/include $out/bin $out/share/cuvslam
@@ -236,7 +243,7 @@
         # library carries both backends and use_gpu becomes a runtime switch.
         forkSdkFor = name: fork: let
           hasCuda = fork ? cuda;
-          cudaSet = pkgs.${fork.cuda};
+          cudaSet = (cudaPkgsFor name).${fork.cuda};
           # cuNLS and its cuDSS are CUDA-only.
           deps = if hasCuda then forkDepsFor fork else builtins.removeAttrs (forkDepsFor fork) [ "cunls" "cudss" ];
           stdenv = if hasCuda then cudaSet.backendStdenv else pkgs.stdenv;
@@ -244,7 +251,7 @@
           pname = "cuvslam-fork-${name}";
           version = "17.0.0-odom-state";
           src = ./cuvslam;
-          nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ] ++ pkgs.lib.optionals hasCuda [ cudaSet.cuda_nvcc ];
+          nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.removeReferencesTo ] ++ pkgs.lib.optionals hasCuda [ cudaSet.cuda_nvcc ];
           buildInputs = pkgs.lib.optionals hasCuda (
             [ cudaSet.cuda_cudart cudaSet.libcublas cudaSet.libcusolver cudaSet.libcusparse ]
             ++ pkgs.lib.optionals (cudaSet ? libnvjitlink) [ cudaSet.libnvjitlink ]
@@ -280,6 +287,11 @@
               > $out/share/cuvslam/NOTICE
             runHook postInstall
           '';
+          # nvcc embeds its link line, so the whole toolkit would otherwise ride along at runtime.
+          postFixup = pkgs.lib.optionalString hasCuda ''
+            remove-references-to -t ${cudaSet.cudatoolkit} $out/lib/libcuvslam.so
+          '';
+          disallowedReferences = pkgs.lib.optionals hasCuda [ cudaSet.cudatoolkit ];
           meta.license = pkgs.lib.licenses.unfree;  # NVIDIA Community License
         };
 
@@ -401,15 +413,11 @@ ${pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (name: sdk: ''
               unset cuvslam_sdk_drv
             fi
           '';
-          # Jetson CUDA is host-provided and nix's glibc does not read the system ld.so.cache,
-          # so both halves have to be named here. Without the driver dir cudart finds no
-          # libcuda.so.1 at all and reports it as one too old for the runtime; without JetPack's
-          # own math libraries winning over nixpkgs', cusolverDnCreate fails on the iGPU.
+          # nix's glibc does not read ld.so.cache, so name the Jetson driver dirs.
           LD_LIBRARY_PATH = pkgs.lib.optionalString (system == "aarch64-linux") (
             pkgs.lib.concatStringsSep ":" [
               "/usr/lib/aarch64-linux-gnu/nvidia"
               "/usr/lib/aarch64-linux-gnu/tegra"
-              "/usr/local/cuda/targets/aarch64-linux/lib"
             ]
           );
         };
