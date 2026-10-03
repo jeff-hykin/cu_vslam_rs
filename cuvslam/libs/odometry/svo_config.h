@@ -25,8 +25,8 @@
 #include "common/imu_calibration.h"
 #include "pipelines/inertial_pnp.h"
 #include "pipelines/tracker_state_machine.h"
+#include "pnp/icp_settings.h"
 #include "pnp/multicam_pnp.h"
-#include "pnp/visual_icp.h"
 #include "sba/sba_config.h"
 #include "sof/sof_config.h"
 

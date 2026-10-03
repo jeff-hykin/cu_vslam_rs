@@ -37,7 +37,9 @@
 #include "odometry/increment_pose.h"
 #include "odometry/mono_visual_odometry.h"
 #include "odometry/multi_visual_odometry.h"
+#ifdef USE_CUDA
 #include "odometry/rgbd_odometry.h"
+#endif
 #include "odometry/stereo_inertial_odometry.h"
 #include "odometry/svo_config.h"
 #include "slam/async_slam/async_slam.h"
@@ -742,10 +744,14 @@ Odometry::Odometry(const Rig& rig, const Config& cfg) {
       break;
     }
     case OdometryMode::RGBD: {
+#ifdef USE_CUDA
       tracker->rgbd_settings = cfg.rgbd_settings;
       tracker->visual_odometry =
           std::make_unique<odom::RGBDOdometry>(tracker->rig, tracker->fig, svo_settings, cfg.use_gpu);
       break;
+#else
+      throw std::invalid_argument("cuVSLAM: RGBD odometry needs a CUDA build");
+#endif
     }
     case OdometryMode::Multisensor: {
 #ifdef USE_CUNLS
