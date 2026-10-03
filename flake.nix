@@ -59,7 +59,7 @@
           aarch64 = {
             system = "aarch64-linux";
           };
-          # ARM with no NVIDIA GPU at all (Raspberry Pi), likewise fork-only.
+          # ARM with no NVIDIA GPU (Raspberry Pi).
           aarch64-cpu = {
             system = "aarch64-linux";
           };
@@ -113,8 +113,7 @@
             cudssCuda = "cuda13";
             cudssSha256 = "02clxpqz0b60rfyrkz763yk0n15kk8bbn6wpqp1i0bkrjrbpxzn5";
           };
-          # No `cuda`: built USE_CUDA=OFF, so nothing in its closure is CUDA. The aarch64 build
-          # above also runs on the CPU, but drags a CUDA stack onto machines that cannot use it.
+          # No `cuda`: built USE_CUDA=OFF.
           aarch64-cpu = { };
         };
 
@@ -290,9 +289,7 @@
         sdkPackageFor = name: sdk:
           if forkBuilds ? ${name} then forkSdkFor name forkBuilds.${name} else sdkFor name sdk;
 
-        # Which variant this host needs depends on its SoC and driver, which evaluation cannot
-        # see, so the default carries every variant for the system and this picks at runtime.
-        # One build cannot serve both Jetsons: JetPack 6's driver cannot load a CUDA 13 runtime.
+        # Nix can't see the SoC or driver, so the variant is picked at runtime.
         cuvslamVariant = pkgs.writeShellApplication {
           name = "cuvslam-variant";
           runtimeInputs = [ pkgs.coreutils pkgs.gnused ];
@@ -318,7 +315,6 @@
                     fi ;;
                 esac ;;
               Linux-x86_64)
-                # The driver's CUDA version, not the toolkit's: it bounds which runtime loads.
                 cuda_major=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: *\([0-9]*\).*/\1/p' | head -n 1 || true)
                 case "$cuda_major" in
                   "")
@@ -346,12 +342,9 @@
                x86_64 = sdkPackageFor "x86_64-cuda12" forThisSystem.x86_64-cuda12;
              };
 
-        # What the default carries. Not the generic aarch64 build: it would put a third CUDA
-        # stack on every Jetson for the sake of ARM servers with NVIDIA GPUs, which can build
-        # sdk-aarch64. GPU-less ARM gets aarch64-cpu, which has no CUDA in it.
+        # Excludes aarch64: a third CUDA stack on every Jetson.
         bundledVariants = builtins.removeAttrs allVariants [ "aarch64" ];
 
-        # <variant>/ per SDK, plus bin/cuvslam-sdk-dir naming the one this host needs.
         sdkBundle = pkgs.runCommand "cuvslam-sdk-bundle" { } ''
           mkdir -p $out/bin
           ${pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (name: sdk: ''
@@ -386,16 +379,14 @@
         packages = pkgs.lib.mapAttrs' (name: sdk: { name = "sdk-${name}"; value = sdk; }) allVariants
           // { default = sdkBundle; cuvslam-variant = cuvslamVariant; };
 
-        # For consumers that build one binary per variant and pick between them at launch.
         inherit bundledVariants;
 
-        # A compile check: the shim and bindings link against each SDK.
+        # A compile check against each SDK.
         checks = pkgs.lib.mapAttrs' (name: sdk: { name = "crate-${name}"; value = crateFor sdk; })
           (builtins.removeAttrs allVariants [ "x86_64" ]);
 
         devShells.default = pkgs.mkShell {
           packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt ];
-          # Builds only this host's SDK rather than the whole bundle.
           shellHook = ''
             if [ -z "''${CUVSLAM_SDK_DIR:-}" ]; then
               case "$(${cuvslamVariant}/bin/cuvslam-variant)" in
