@@ -133,6 +133,10 @@ private:
                                 Eigen::Ref<storage::Mat6<float>> covariance);
   void eradicatePast();
 
+  // Drops the map and makes this keyframe the reference the next keyframe is solved against.
+  void restartFromKeyframe(FrameId frame, const std::vector<camera::Observation>& frame_tracks,
+                           const Isometry3T& world_from_rig);
+
   void purgeNonEpipolarTracks(Vector2TPairVector& sampleSequence, float threshold);
 
   bool solveFrameRange(FrameId frame1, FrameId frame2, const storage::Pose<float>& cam1, Isometry3T& cam2,

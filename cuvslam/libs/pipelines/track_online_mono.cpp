@@ -848,10 +848,14 @@ ErrorCode SolverSfMMono::monoSolveNextFrame(const std::vector<camera::Observatio
   }
 
   Isometry3T curCamMat = prevCamMat_;
+  // Whether this frame got a pose of its own, rather than the last frame's handed back unchanged.
+  bool solved = false;
   if (startResectioning_) {
     getTracksForEpipolar(map_.observations[0].at(lastKeyframe_), frame_tracks);
 
-    if (!resectioning(intrinsics, curCamMat, frame_tracks, covariance)) {
+    if (resectioning(intrinsics, curCamMat, frame_tracks, covariance)) {
+      solved = true;
+    } else {
       startResectioning_ = false;
       TracePrint("Can't do first resectioning in frame %zu\n", static_cast<size_t>(curFrame));
     }
@@ -863,8 +867,10 @@ ErrorCode SolverSfMMono::monoSolveNextFrame(const std::vector<camera::Observatio
       lastKeyframe_ = curFrame;
       add_frame_to_map(map_, curFrame, frame_tracks, curCamMat);
       keyframesForSBA_.push_back(curFrame);
+      solved = true;
     } else {
       getTracksForEpipolar(map_.observations[0].at(lastKeyframe_), frame_tracks);
+      const size_t tracks_shared_with_reference = tracksForEpipolar_1_.size();
 
       const Isometry3T last_kf_predicted_pose = last_kf_predicted_pose_;
       const Isometry3T* p_last_kf_predicted_pose = last_kf_predicted_pose_valid_ ? &last_kf_predicted_pose : NULL;
@@ -876,9 +882,9 @@ ErrorCode SolverSfMMono::monoSolveNextFrame(const std::vector<camera::Observatio
                           predicted_pose, intrinsics, covariance, predicted_scale)) {
         add_frame_to_map(map_, curFrame, frame_tracks, curCamMat);
 
-        if (lastKeyframe_ == 0) {  // TODO: track lost recover
-          // first pair of frames we resolve relative transformation
-          // ever - need to set 3D points always
+        if (keyframesForSBA_.size() == 1) {
+          // first pair of frames of this map we resolve relative transformation
+          // - need to set 3D points always
           triangulateTracks(lastKeyframe_, curFrame, frame_tracks, map_.tracks);
         }
 
@@ -902,6 +908,7 @@ ErrorCode SolverSfMMono::monoSolveNextFrame(const std::vector<camera::Observatio
         relativeTransform_ = last_kf_pose.inverse() * cur_pose;
         curCamMat = cur_pose;
         startResectioning_ = true;
+        solved = true;
         lastKeyframe_ = curFrame;
         eradicatePast();
 
@@ -925,6 +932,11 @@ ErrorCode SolverSfMMono::monoSolveNextFrame(const std::vector<camera::Observatio
           // bgFrameProcResult_ = std::async(std::launch::async, bgProcCB);
           assert(bgFrameProcResult_.valid());
         }
+      } else if (!startResectioning_ &&
+                 tracks_shared_with_reference < epipolar::ComputeFundamental::MINIMUM_NUMBER_OF_POINTS) {
+        // Too few of the reference keyframe's tracks survive to ever solve against it again, so
+        // without a new reference every later frame would get this one's pose back unchanged.
+        restartFromKeyframe(curFrame, frame_tracks, curCamMat);
       }
       if (predicted_pose != NULL) {
         last_kf_predicted_pose_ = *predicted_pose;
@@ -973,7 +985,31 @@ ErrorCode SolverSfMMono::monoSolveNextFrame(const std::vector<camera::Observatio
   }
   out_cameraExtrinsics = curCamMat;
 
-  return ErrorCode::S_True;
+  return solved ? ErrorCode::S_True : ErrorCode::S_False;
+}
+
+void SolverSfMMono::restartFromKeyframe(FrameId frame, const std::vector<camera::Observation>& frame_tracks,
+                                        const Isometry3T& world_from_rig) {
+  if (bgFrameProcResult_.valid()) {
+    // Its result belongs to the map being dropped; merged later it would bring that map back.
+    try {
+      bgFrameProcResult_.get();
+    } catch (...) {
+      TracePrint("\nSBA thread crashed\n");
+    }
+  }
+  ahead_sba_observations_.clear();
+  map_.tracks.clear();
+  map_.observations[0].clear();
+  map_.tracking_states.clear();
+  keyframesForSBA_.clear();
+  nodalCamera_ = false;
+  isHomography_ = false;
+  last_kf_predicted_pose_valid_ = false;
+
+  lastKeyframe_ = frame;
+  add_frame_to_map(map_, frame, frame_tracks, world_from_rig);
+  keyframesForSBA_.push_back(frame);
 }
 
 }  // namespace cuvslam::pipelines
