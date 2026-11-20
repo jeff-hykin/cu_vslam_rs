@@ -16,7 +16,9 @@ fn main() {
 
     cc::Build::new()
         .cpp(true)
-        .std("c++20")
+        // GCC 9 (Ubuntu 20.04, the RK3588 boards) spells C++20 as c++2a.
+        .flag_if_supported("-std=c++20")
+        .flag_if_supported("-std=c++2a")
         .file("shim/cuvslam_shim.cpp")
         .include(sdk_dir.join("include"))
         .compile("cuvslam_shim");

@@ -177,7 +177,8 @@ fn assert_tracking_really_happened(estimates: &[PoseEstimate]) {
     );
 }
 
-fn run_on(backends: &[bool], body: impl Fn(bool)) {
+/// Runs `body` on each available backend of `backends`; true when any ran.
+fn run_on_available(backends: &[bool], body: impl Fn(bool)) -> bool {
     let mut ran_any = false;
     for &use_gpu in backends {
         if !backend_is_available(use_gpu) {
@@ -188,17 +189,23 @@ fn run_on(backends: &[bool], body: impl Fn(bool)) {
         body(use_gpu);
         ran_any = true;
     }
-    assert!(ran_any, "no requested backend is available here");
+    ran_any
 }
 
 fn on_every_backend(body: impl Fn(bool)) {
-    run_on(&[false, true], body);
+    assert!(
+        run_on_available(&[false, true], body),
+        "no backend is available here"
+    );
 }
 
 // cuVSLAM lifts depth pixels to points only in a CUDA kernel, so an RGBD tracker built with
 // use_gpu=false finds no landmarks and reports no motion at all.
+// An SDK built without CUDA (USE_CUDA=OFF) has no GPU backend and no RGBD: nothing to run.
 fn on_gpu_only(body: impl Fn(bool)) {
-    run_on(&[true], body);
+    if !run_on_available(&[true], body) {
+        println!("skipping: this SDK has no GPU backend");
+    }
 }
 
 #[test]

@@ -271,6 +271,42 @@
           meta.license = pkgs.lib.licenses.unfree;  # NVIDIA Community License
         };
 
+        # No CUDA at all (USE_CUDA=OFF): the CPU backend only, for any Linux board without an
+        # NVIDIA GPU (a Rockchip, a Pi). Stereo and mono track; RGBD and use_gpu are refused.
+        cpuSdk = pkgs.stdenv.mkDerivation {
+          pname = "cuvslam-fork-cpu";
+          version = "17.0.0-odom-state";
+          src = ./cuvslam;
+          nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
+          cmakeFlags = [
+            "-DCMAKE_BUILD_TYPE=Release"
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+            "-DUSE_CUDA=OFF"
+            "-DUSE_CUNLS=OFF"
+            "-DENFORCE_GPU=OFF"
+          ];
+          preConfigure = pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList
+            (depName: depSource: ''
+              mkdir -p dep-src
+              cp -r --no-preserve=mode ${depSource} dep-src/${depName}
+              cmakeFlagsArray+=("-DFETCHCONTENT_SOURCE_DIR_${pkgs.lib.toUpper depName}=$PWD/dep-src/${depName}")
+            '')
+            (builtins.removeAttrs (forkDepsFor { }) [ "cunls" "cudss" ]));
+          buildFlags = [ "cuvslam" ];
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/lib $out/include/cuvslam $out/share/cuvslam
+            cp bin/libcuvslam.so $out/lib/
+            cp $src/libs/cuvslam/cuvslam2.h $out/include/cuvslam/
+            cp $src/LICENSE $out/share/cuvslam/
+            echo "Built from cuvslam/ in github.com/jeff-hykin/cu_vslam_rs with USE_CUDA=OFF (CPU only)." \
+              > $out/share/cuvslam/NOTICE
+            runHook postInstall
+          '';
+          meta.license = pkgs.lib.licenses.unfree;  # NVIDIA Community License
+          meta.platforms = pkgs.lib.platforms.linux;
+        };
+
         forThisSystem = pkgs.lib.filterAttrs (_: sdk: sdk.system == system) sdks;
         # CUDA 12 on both linux arches: it is what the drivers in the field are, and
         # a 13 driver runs a 12 build.
@@ -312,6 +348,7 @@
                # under whichever driver gets installed later.
                sdk-x86_64 = sdkPackageFor "x86_64-cuda12" forThisSystem.x86_64-cuda12;
              }
+          // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux { sdk-cpu = cpuSdk; }
           // { default = defaultSdk; };
 
         # A compile check: the shim and bindings link against the default SDK.
