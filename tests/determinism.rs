@@ -177,8 +177,26 @@ fn assert_tracking_really_happened(estimates: &[PoseEstimate]) {
     );
 }
 
-/// Runs `body` on each available backend of `backends`; true when any ran.
-fn run_on_available(backends: &[bool], body: impl Fn(bool)) -> bool {
+// No SDK at all (the stub) tracks nothing, and an SDK built with USE_CUDA=OFF has no GPU
+// backend: those runs have nothing to test. Every other SDK runs exactly as before.
+fn sdk_lacks(use_gpu: bool) -> bool {
+    cfg!(cuvslam_stub)
+        || (use_gpu
+            && Tracker::new(&stereo_cameras(), None, &[], &stereo_config(true))
+                .err()
+                .is_some_and(|error| error.contains("USE_CUDA=ON")))
+}
+
+fn run_on(backends: &[bool], body: impl Fn(bool)) {
+    if backends.iter().all(|&use_gpu| sdk_lacks(use_gpu)) {
+        let why = if cfg!(cuvslam_stub) {
+            "no cuVSLAM SDK (the stub)"
+        } else {
+            "this SDK has no GPU backend"
+        };
+        println!("skipping: {why}");
+        return;
+    }
     let mut ran_any = false;
     for &use_gpu in backends {
         if !backend_is_available(use_gpu) {
@@ -189,23 +207,17 @@ fn run_on_available(backends: &[bool], body: impl Fn(bool)) -> bool {
         body(use_gpu);
         ran_any = true;
     }
-    ran_any
+    assert!(ran_any, "no requested backend is available here");
 }
 
 fn on_every_backend(body: impl Fn(bool)) {
-    assert!(
-        run_on_available(&[false, true], body),
-        "no backend is available here"
-    );
+    run_on(&[false, true], body);
 }
 
 // cuVSLAM lifts depth pixels to points only in a CUDA kernel, so an RGBD tracker built with
 // use_gpu=false finds no landmarks and reports no motion at all.
-// An SDK built without CUDA (USE_CUDA=OFF) has no GPU backend and no RGBD: nothing to run.
 fn on_gpu_only(body: impl Fn(bool)) {
-    if !run_on_available(&[true], body) {
-        println!("skipping: this SDK has no GPU backend");
-    }
+    run_on(&[true], body);
 }
 
 #[test]

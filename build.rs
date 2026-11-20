@@ -14,11 +14,15 @@ fn main() {
         return;
     };
 
-    cc::Build::new()
-        .cpp(true)
-        // GCC 9 (Ubuntu 20.04, the RK3588 boards) spells C++20 as c++2a.
-        .flag_if_supported("-std=c++20")
-        .flag_if_supported("-std=c++2a")
+    let mut build = cc::Build::new();
+    build.cpp(true);
+    // GCC 9 (Ubuntu 20.04, the RK3588 boards) only knows C++20 as c++2a.
+    if build.is_flag_supported("-std=c++20").unwrap_or(true) {
+        build.std("c++20");
+    } else {
+        build.flag("-std=c++2a");
+    }
+    build
         .file("shim/cuvslam_shim.cpp")
         .include(sdk_dir.join("include"))
         .compile("cuvslam_shim");
