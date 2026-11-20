@@ -37,7 +37,9 @@
 #include "odometry/increment_pose.h"
 #include "odometry/mono_visual_odometry.h"
 #include "odometry/multi_visual_odometry.h"
+#ifdef USE_CUDA
 #include "odometry/rgbd_odometry.h"
+#endif
 #include "odometry/stereo_inertial_odometry.h"
 #include "odometry/svo_config.h"
 #include "slam/async_slam/async_slam.h"
@@ -643,6 +645,9 @@ Odometry::Odometry(const Rig& rig, const Config& cfg) {
 #ifdef ENFORCE_GPU
   THROW_INVALID_ARG_IF(!cfg.use_gpu, "cfg.use_gpu must be enabled");
 #endif
+#ifndef USE_CUDA
+  THROW_INVALID_ARG_IF(cfg.use_gpu, "cfg.use_gpu needs a build with CUDA (USE_CUDA=ON)");
+#endif
 
   CheckCameras(rig);
 
@@ -742,10 +747,15 @@ Odometry::Odometry(const Rig& rig, const Config& cfg) {
       break;
     }
     case OdometryMode::RGBD: {
+#ifdef USE_CUDA
       tracker->rgbd_settings = cfg.rgbd_settings;
       tracker->visual_odometry =
           std::make_unique<odom::RGBDOdometry>(tracker->rig, tracker->fig, svo_settings, cfg.use_gpu);
       break;
+#else
+      // depth is lifted into landmarks only by a CUDA kernel (lift_kernel)
+      throw std::invalid_argument{"OdometryMode::RGBD requires a build with CUDA (USE_CUDA=ON)"};
+#endif
     }
     case OdometryMode::Multisensor: {
 #ifdef USE_CUNLS

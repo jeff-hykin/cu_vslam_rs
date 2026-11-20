@@ -33,6 +33,7 @@
 #include "pipelines/track.h"
 #include "profiler/profiler.h"
 #include "profiler/profiler_enable.h"
+#include "pnp/icp_settings.h"
 
 namespace cuvslam::pnp {
 
@@ -47,22 +48,6 @@ struct IcpInfo {
   }
 };
 
-struct ICPSettings {
-  float lambda = 1e-2;
-  float huber_vis = 1e-2;
-
-  float huber_depth = 5e-2;
-
-  int32_t max_iteration = 20;
-  bool verbose = false;
-  float cost_thresh = 0.6;
-
-  int32_t min_scale_level = 0;
-  int32_t max_scale_level = 4;
-  int32_t num_iters_per_scale = 20;
-
-  float blending_alpha = 0.8f;
-};
 
 class VisualICP {
 public:
